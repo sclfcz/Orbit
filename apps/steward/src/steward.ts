@@ -406,6 +406,7 @@ export class Steward extends Agent<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    this.openCodeSessionId = ctx.id.toString();
     this.lifecycle.use(this.piHarness);
   }
 
@@ -415,6 +416,8 @@ export class Steward extends Agent<Env> {
   // would clobber what the getter wrote.
 
   private testingModel = false;
+  /** Stable for this Durable Object's owner conversation across isolate restarts. */
+  private readonly openCodeSessionId: string;
   private stewardModels_?: StewardModels;
   private piRegistry_?: Registry;
   private stewardExtension_?: Extension;
@@ -530,7 +533,7 @@ export class Steward extends Agent<Env> {
     const vars = this.modelVarsConfig;
     const config = mergeModelSelection(sealed, vars);
     const apiKey = sealed && sealed.provider === config.provider ? sealed.apiKey : undefined;
-    installModel(this.llmModels.models, config, apiKey);
+    installModel(this.llmModels.models, config, apiKey, this.openCodeSessionId);
     // Review #10: a provider/model combination the catalog does not know (e.g. a sealed
     // provider whose key was collected for another vendor while vars still carry the default
     // model id) fails visibly as `no_model` — surface it in the channel log too, with the

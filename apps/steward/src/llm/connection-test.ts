@@ -12,7 +12,8 @@ export async function testModelConnection(
   fetcher: FetchFunction = fetch,
 ): Promise<ConnectionTestResult> {
   if (!apiKey) return { ok: false, error: "missing_key" };
-  const { models } = buildStewardModels(config, apiKey);
+  const sessionId = config.provider === "opencode-go" ? crypto.randomUUID() : undefined;
+  const { models } = buildStewardModels(config, apiKey, sessionId);
   const model = models.getModel(config.provider, config.modelId);
   if (!model) return { ok: false, error: "unknown_model" };
   const { thinkingLevel } = resolveModelThinking(config);

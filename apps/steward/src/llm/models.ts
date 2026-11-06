@@ -148,7 +148,12 @@ export function resolveModelConfig(raw: unknown): StewardModelConfig {
  * the Worker. A missing key keeps the provider registered but unconfigured, so model calls
  * fail loudly instead of silently trying `DEEPSEEK_API_KEY`.
  */
-export function providerWithInlineKey(base: Provider, apiKey: string | undefined, baseUrl?: string): Provider {
+export function providerWithInlineKey(base: Provider, apiKey: string | undefined, baseUrl?: string, sessionId?: string): Provider {
+  const models = base.getModels().map((model) =>
+    base.id === "opencode-go" && sessionId
+      ? { ...model, headers: { ...model.headers, "x-opencode-session": sessionId } }
+      : model,
+  );
   return createProvider({
     id: base.id,
     name: base.name,
@@ -160,7 +165,7 @@ export function providerWithInlineKey(base: Provider, apiKey: string | undefined
         resolve: async () => (apiKey ? { auth: { apiKey, ...(baseUrl ? { baseUrl } : {}) }, source: "deploy config" } : undefined),
       },
     },
-    models: [...base.getModels()],
+    models,
     api: {
       stream: base.stream.bind(base),
       streamSimple: base.streamSimple.bind(base),
@@ -206,11 +211,11 @@ export interface StewardModels {
  * key (readable only after migrations) is installed onto that same object later. Idempotent;
  * the faux provider is never touched (its in-memory script is per-isolate state).
  */
-export function installModel(models: MutableModels, config: StewardModelConfig, apiKey: string | undefined): void {
+export function installModel(models: MutableModels, config: StewardModelConfig, apiKey: string | undefined, sessionId?: string): void {
   if (config.provider === "faux") return;
   const base = stewardProviders().find((p) => p.id === config.provider);
   if (!base) return; // unknown provider: registers nothing — runs fail visibly as no_model
-  models.setProvider(providerWithInlineKey(base, apiKey, config.baseUrl));
+  models.setProvider(providerWithInlineKey(base, apiKey, config.baseUrl, sessionId));
 }
 
 const textOf = (content: unknown): string => {
@@ -231,7 +236,7 @@ const textOf = (content: unknown): string => {
  * assertions, and the FIFO script decides the reply (a benign default when it runs dry, so an
  * unscripted DO never wedges a run).
  */
-export function buildStewardModels(config: StewardModelConfig, apiKey: string | undefined): StewardModels {
+export function buildStewardModels(config: StewardModelConfig, apiKey: string | undefined, sessionId?: string): StewardModels {
   if (config.provider === "faux") {
     const makeFaux = (tokensPerSecond?: number): FauxProviderHandle =>
       fauxProvider({ models: [{ id: config.modelId, name: "Faux" }], ...(tokensPerSecond === undefined ? {} : { tokensPerSecond }) });
@@ -324,6 +329,6 @@ export function buildStewardModels(config: StewardModelConfig, apiKey: string | 
   }
   // An unknown model id is likewise kept as configured (it fails visibly as `no_model`);
   // silently substituting a different model would break the eval-baseline rule.
-  models.setProvider(providerWithInlineKey(base, apiKey, config.baseUrl));
+  models.setProvider(providerWithInlineKey(base, apiKey, config.baseUrl, sessionId));
   return { models, config };
 }
