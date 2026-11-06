@@ -1,0 +1,55 @@
+// The deploy target (issue #25): Deploy-to-Cloudflare buttons and Workers Builds read the
+// Wrangler config from the repository root, and the default deploy command `npx wrangler
+// deploy` (or `npm run deploy -- --name <unique-name>`, scripts/deploy.mjs) runs there — so
+// the steward Worker's config lives here, pointing into the monorepo (ADR-0001 decision 2)
+// instead of apps/steward/. Local dev/tests pass `--config ../../wrangler.jsonc` from
+// apps/steward.
+//
+// LOGIN_PASSWORD is the deploy-form secret, deliberately NOT declared here (the Deploy-button
+// form reads .dev.vars.example). The model API key is set in the workspace's Settings after
+// sign-in; a MODEL_KEY secret still seeds it for terminal deployments. New deployments
+// generate their signing key inside the owner Durable Object. Existing explicit-key deployments
+// retain SERVER_KEY and SERVER_KEY_PREVIOUS. See docs/deploy.md and ADR-0010.
+//
+// The steward's model selection (issue #6, ADR-0001 decision 11) is deploy config — set
+// `vars.STEWARD_MODEL` here to override the default deepseek/deepseek-flash (the eval
+// baseline), e.g.:
+//   "vars": { "STEWARD_MODEL": "{\"provider\": \"deepseek\", \"modelId\": \"deepseek-v4-pro\"}" }
+// The daily budget soft cap (issue #28, ADR-0001 decision 15) is deploy config too: set
+// `vars.DAILY_BUDGET_USD` (dollars per UTC day) to override the default $1 — past it,
+// event/routine/follow-up wakes stop reaching the model while done reports, fallback
+// pushes, digests, and replies to the owner continue:
+//   "vars": { "DAILY_BUDGET_USD": "0.5" }
+// The API key never rides in vars: it is the sealed sh_model row (seeded from MODEL_KEY at
+// deploy, or set via setModelConfig — the web workspace's Settings page calls it), and the
+// provider is built with an inline auth.apiKey.resolve (spike bug 7). A missing key or
+// unknown provider/model fails visibly (`sh_run` settles `unanswered`), never with a
+// silently different model.
+{
+  "name": "sig-steward",
+  "main": "apps/steward/src/index.ts",
+  "workers_dev": true,
+  // Static assets, one directory (ADR-0004): the web workspace's plain HTML/CSS/JS files
+  // (no frontend build) plus the two brand files under brand/ — only those two are public;
+  // index.ts gates every other route, so /app/assets/* sits behind the same session gate
+  // as the rest of /app.
+  "assets": { "directory": "./apps/steward/ui", "binding": "ASSETS", "run_worker_first": true },
+  "compatibility_date": "2026-10-10",
+  "compatibility_flags": ["nodejs_compat"],
+  "ratelimits": [
+    { "name": "LOGIN_RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "Steward", "class_name": "Steward" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Steward"] }],
+  "previews": {
+    "observability": { "enabled": true },
+    "vars": {
+      "STEWARD_MODEL": "{\"provider\":\"faux\",\"modelId\":\"faux-1\"}"
+    },
+    "durable_objects": {
+      "bindings": [{ "name": "Steward", "class_name": "Steward" }]
+    }
+  }
+}

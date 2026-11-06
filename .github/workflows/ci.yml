@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # `version` is intentionally omitted: pnpm/action-setup reads the authoritative
+      # `packageManager` pin from package.json. Declaring both is a hard error in the action
+      # ("Multiple versions of pnpm specified") — and Corepack re-adds the field on every
+      # local `pnpm` run when it is missing, so reverting it fights a battle CI keeps losing.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r typecheck
+      - run: pnpm -r test
+      # Issue #26: the connector must ship as a self-contained `@alexlikevibe/sig` tarball —
+      # bundled dist, bin wrapper, zero runtime dependencies (workspace deps stay in dev).
+      # Fail the build if the layout regresses.
+      - name: connector tarball layout
+        run: |
+          cd apps/connector
+          npm pack --dry-run 2>&1 | tee /tmp/pack.log
+          for f in dist/cli.js dist/ext/sig-pi.ts bin/sig.js; do
+            grep -q " $f$" /tmp/pack.log || { echo "tarball is missing $f"; exit 1; }
+          done
+          node -e "const p=require('./package.json'); \
+            if (p.dependencies && Object.keys(p.dependencies).length > 0) { \
+              console.error('runtime dependencies leaked into the manifest'); process.exit(1); }"

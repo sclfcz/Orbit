@@ -1,0 +1,182 @@
+// Password screening is deliberately tested without the network: the range response shape is
+// the security boundary, and a malformed or unavailable service must keep password setup closed.
+import { describe, expect, it, vi } from "vitest";
+import { SELF, env, runInDurableObject } from "cloudflare:test";
+import { MIGRATIONS, runMigrations } from "../src/schema.ts";
+import type { Steward } from "../src/steward.ts";
+import { DeploymentAuth, PBKDF2_ITERATIONS, passwordDigest, screenPassword } from "../src/deployment-auth.ts";
+
+async function sha1(password: string): Promise<string> {
+  const bytes = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(password));
+  return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("").toUpperCase();
+}
+
+describe("deployment password screening", () => {
+  it("rejects short and common passwords before making a network request", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    expect(await screenPassword("too short", fetchImpl)).toBe(false);
+    expect(await screenPassword("password!!!!!!!!!", fetchImpl)).toBe(false);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects a compromised password and accepts an absent range suffix", async () => {
+    const compromised = "a long but publicly compromised passphrase";
+    const hash = await sha1(compromised);
+    const compromisedFetch = vi.fn<typeof fetch>(async () =>
+      new Response(`${hash.slice(5)}:7\r\n${"0".repeat(35)}:0\r\n`));
+    expect(await screenPassword(compromised, compromisedFetch)).toBe(false);
+
+    const cleanFetch = vi.fn<typeof fetch>(async () => new Response(`${"0".repeat(35)}:0\r\n`));
+    expect(await screenPassword("a unique local deployment password 91!", cleanFetch)).toBe(true);
+  });
+
+  it("fails closed when the range response is malformed", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response("not a padded hash range"));
+    await expect(screenPassword("a unique local deployment password 92!", fetchImpl)).rejects.toThrow("invalid password screening response");
+  });
+
+  it("stores an algorithm-tagged verifier rather than the password", async () => {
+    const digest = await passwordDigest("a unique local deployment password 93!", "00112233445566778899aabbccddeeff");
+    expect(digest).toMatch(/^pbkdf2-sha256\$100000\$[0-9a-f]{64}$/);
+    expect(digest).not.toContain("unique local");
+  });
+
+  it("stays within the PBKDF2 iteration limit of deployed Workers", () => {
+    // Local workerd accepts larger counts, so only this assertion catches a regression that
+    // makes every real deployment fail password setup with NotSupportedError.
+    expect(PBKDF2_ITERATIONS).toBeLessThanOrEqual(100_000);
+  });
+});
+
+describe("deployment password availability", () => {
+  it("returns actionable missing configuration without opening a session", async () => {
+    const response = await SELF.fetch("https://example.com/auth/password", {
+      method: "POST",
+      headers: { origin: "https://example.com", "content-type": "application/json", "CF-Connecting-IP": "203.0.113.51" },
+      body: JSON.stringify({ password: "12345" }),
+    });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "password_not_configured" });
+    expect(response.headers.has("set-cookie")).toBe(false);
+  });
+
+  it("rejects a short configured password without storing a verifier", async () => {
+    await withAuthStorage(async (input) => {
+      const auth = new DeploymentAuth({ ...input, env: { LOGIN_PASSWORD: "12345" } });
+      expect(await auth.verifyPassword("12345", "weak")).toBe("password_rejected");
+      expect(input.sql`SELECT id FROM sh_auth_password`).toEqual([]);
+    });
+  });
+
+  it("identifies a missing deployment password", async () => {
+    await withAuthStorage(async (input) => {
+      const auth = new DeploymentAuth({ ...input, env: {} });
+      expect(await auth.verifyPassword("12345", "missing")).toBe("password_not_configured");
+    });
+  });
+
+  it("retries a temporary screening outage without requiring a new password", async () => {
+    await withAuthStorage(async (input) => {
+      const screen = vi.fn<(password: string) => Promise<boolean>>()
+        .mockRejectedValueOnce(new Error("offline"))
+        .mockResolvedValue(true);
+      const auth = new DeploymentAuth({ ...input, env: { LOGIN_PASSWORD: "a unique deployment password 94!" }, screenPassword: screen });
+      expect(await auth.verifyPassword("a unique deployment password 94!", "outage")).toBe("password_screening_unavailable");
+      expect(await auth.verifyPassword("a unique deployment password 94!", "outage")).toBe("password_screening_unavailable");
+      expect(screen).toHaveBeenCalledTimes(1);
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now + 60_001);
+      try {
+        expect(await auth.verifyPassword("a unique deployment password 94!", "outage")).toBe("valid");
+        expect(await auth.verifyPassword("wrong password", "outage")).toBe("invalid");
+        expect(screen).toHaveBeenCalledTimes(2);
+      } finally {
+        clock.mockRestore();
+      }
+    });
+  });
+
+  it("does not report a verifier derivation failure as a screening outage", async () => {
+    await withAuthStorage(async (input) => {
+      const derive = vi.spyOn(crypto.subtle, "deriveBits").mockRejectedValue(
+        new DOMException("Pbkdf2 failed: iteration counts above 100000 are not supported", "NotSupportedError"),
+      );
+      try {
+        const auth = new DeploymentAuth({ ...input, env: { LOGIN_PASSWORD: "a unique deployment password 96!" }, screenPassword: async () => true });
+        expect(await auth.verifyPassword("a unique deployment password 96!", "derive")).toBe("password_unavailable");
+        expect(input.sql`SELECT id FROM sh_auth_password`).toEqual([]);
+      } finally {
+        derive.mockRestore();
+      }
+    });
+  });
+
+  it("revokes the previous browser authority when a replacement is rejected", async () => {
+    await withAuthStorage(async (input) => {
+      const original = new DeploymentAuth({ ...input, env: { LOGIN_PASSWORD: "a unique deployment password 95!" }, screenPassword: async () => true });
+      expect(await original.verifyPassword("a unique deployment password 95!", "original")).toBe("valid");
+      const revoked = vi.fn();
+      const replacement = new DeploymentAuth({ ...input, env: { LOGIN_PASSWORD: "12345" }, sessionsRevoked: revoked });
+      expect(await replacement.verifyPassword("12345", "replacement")).toBe("password_rejected");
+      expect(input.sql`SELECT id FROM sh_auth_password`).toEqual([]);
+      expect(revoked).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("reconciles a changed deployment secret within the same isolate", async () => {
+    await withAuthStorage(async (input) => {
+      const env = { LOGIN_PASSWORD: "12345" };
+      const revoked = vi.fn();
+      const screen = vi.fn<(password: string) => Promise<boolean>>()
+        .mockImplementation(async (password) => password !== "12345");
+      const auth = new DeploymentAuth({ ...input, env, sessionsRevoked: revoked, screenPassword: screen });
+      expect(await auth.verifyPassword("12345", "rejected-original")).toBe("password_rejected");
+
+      env.LOGIN_PASSWORD = "a unique deployment password 97!";
+      expect(await auth.verifyPassword("a unique deployment password 97!", "original")).toBe("valid");
+
+      env.LOGIN_PASSWORD = "a unique deployment password 98!";
+      expect(await auth.verifyPassword("a unique deployment password 98!", "replacement")).toBe("valid");
+      expect(await auth.verifyPassword("a unique deployment password 97!", "replacement-old")).toBe("invalid");
+
+      env.LOGIN_PASSWORD = "12345";
+      expect(await auth.verifyPassword("12345", "rejected-replacement")).toBe("password_rejected");
+      expect(input.sql`SELECT id FROM sh_auth_password`).toEqual([]);
+      expect(revoked).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("lets a newer deployment secret synchronization win", async () => {
+    await withAuthStorage(async (input) => {
+      const original = "a unique deployment password 99!";
+      const replacement = "a unique deployment password 100!";
+      const env = { LOGIN_PASSWORD: original };
+      let releaseOriginal: (accepted: boolean) => void = () => {};
+      const originalScreen = new Promise<boolean>((resolve) => {
+        releaseOriginal = resolve;
+      });
+      const screen = vi.fn<(password: string) => Promise<boolean>>()
+        .mockImplementation(async (password) => password === original ? originalScreen : true);
+      const auth = new DeploymentAuth({ ...input, env, screenPassword: screen });
+
+      const originalVerification = auth.verifyPassword(original, "concurrent");
+      env.LOGIN_PASSWORD = replacement;
+      const replacementVerification = auth.verifyPassword(replacement, "concurrent");
+      releaseOriginal(true);
+
+      await expect(originalVerification).resolves.toBe("valid");
+      await expect(replacementVerification).resolves.toBe("valid");
+      expect(await auth.verifyPassword(replacement, "concurrent-after")).toBe("valid");
+      expect(screen).toHaveBeenCalledTimes(2);
+    });
+  });
+});
+
+async function withAuthStorage(run: (input: Pick<ConstructorParameters<typeof DeploymentAuth>[0], "sql" | "transaction" | "sessionsRevoked">) => Promise<void>): Promise<void> {
+  const stub = env.Steward.get(env.Steward.idFromName(`password-availability-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, async (instance: Steward, state: DurableObjectState) => {
+    const sql = instance.sql.bind(instance);
+    runMigrations(sql, MIGRATIONS, (operation) => state.storage.transactionSync(operation));
+    await run({ sql, transaction: (operation) => state.storage.transactionSync(operation), sessionsRevoked: () => {} });
+  });
+}

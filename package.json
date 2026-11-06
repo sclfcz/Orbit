@@ -1,0 +1,32 @@
+{
+  "name": "sig",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "dev:steward": "wrangler dev",
+    "deploy": "node scripts/deploy.mjs"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
+  },
+  "cloudflare": {
+    "bindings": {
+      "LOGIN_PASSWORD": {
+        "description": "**At least 15 characters.** Generate and save a unique password with your password manager. Sig checks this password after deployment and rejects short, common, or compromised passwords. If rejected, replace LOGIN_PASSWORD under Worker > Settings > Variables and Secrets and deploy the change. Use this password to sign in at the Worker URL."
+      }
+    }
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "workerd"
+    ]
+  },
+  "packageManager": "pnpm@10.33.0+sha512.10568bb4a6afb58c9eb3630da90cc9516417abebd3fabbe6739f0ae795728da1491e9db5a544c76ad8eb7570f5c4bb3d6c637b2cb41bfdcdb47fa823c8649319",
+  "license": "MIT"
+}
