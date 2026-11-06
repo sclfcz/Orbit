@@ -246,7 +246,7 @@ export function claudeAssistantText(text: string, stopReason = "end_turn"): Reco
 }
 
 /** One assistant message with a tool_use block — MCP tools arrive NAMESPACED
- *  (mcp__sig__report); the connector must suffix-match, never bare-match. */
+ *  (mcp__orbit__report); the connector must suffix-match, never bare-match. */
 export function claudeToolUse(name: string, input: Record<string, unknown>): Record<string, unknown> {
   return {
     type: "assistant",
@@ -263,7 +263,7 @@ export function claudeReportRun(
   return [
     ...(opts.shellBefore ? [{ shell: opts.shellBefore }] : []),
     ...(opts.tool ? [{ emit: claudeToolUse(opts.tool.name, opts.tool.input) }] : []),
-    { emit: claudeToolUse("mcp__sig__report", report) },
+    { emit: claudeToolUse("mcp__orbit__report", report) },
     { emit: claudeAssistantText("Reported.", "end_turn") },
   ];
 }

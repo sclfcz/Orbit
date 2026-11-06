@@ -74,7 +74,7 @@ read-only task to confirm the connection works end to end.
 
 **Done when:** your machine is online in Orbit and a read-only task returns a result. Repeat this prompt on any additional machine.
 
-The connector currently uses its published compatibility package name `@alexlikevibe/sig` and CLI command `sig`; the web workspace and Cloudflare deployment are branded Orbit.
+The connector package is named `@sclfcz/orbit` and installs the `orbit` command. Its first npm release is not published yet; until then, install it from this repository using the connector runbook. Existing machine data stays under `~/.sig` so upgrades can reuse pairings.
 
 The connector makes an outbound connection to Orbit; you do not need to open an inbound port on your computer. Your machine must stay awake and connected for local agents to run.
 

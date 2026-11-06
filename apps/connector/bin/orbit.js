@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// sig bin wrapper (issue #26). This runs before any bundled code so the Node gate can
-// print a readable error instead of a cryptic module crash: sig needs >= 22.18 for
+// orbit bin wrapper (issue #26). This runs before any bundled code so the Node gate can
+// print a readable error instead of a cryptic module crash: orbit needs >= 22.18 for
 // node:sqlite (unflagged since 22.13) and the toolchain baseline pinned in engines.
 import { createRequire } from "node:module";
 
@@ -15,7 +15,7 @@ function meetsMinimum(version) {
 }
 
 function fail(message) {
-  process.stderr.write(`sig: ${message}\n`);
+  process.stderr.write(`orbit: ${message}\n`);
   process.exit(1);
 }
 
@@ -40,7 +40,7 @@ try {
   await import("../dist/cli.js");
 } catch (err) {
   if (err && (err.code === "ERR_MODULE_NOT_FOUND" || err.code === "ERR_UNSUPPORTED_DIR_IMPORT")) {
-    fail("the sig bundle (dist/cli.js) is missing; reinstall the package");
+    fail("the orbit bundle (dist/cli.js) is missing; reinstall the package");
   }
   throw err;
 }

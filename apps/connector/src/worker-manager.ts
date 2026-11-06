@@ -302,7 +302,7 @@ export class WorkerManager {
       adapter.on("worker-event", (event) => {
         void this.onAdapterEvent(event).catch((err) => {
           // Event handling must never take the connector down (e.g. store closed at shutdown).
-          console.error(`[sig] worker-event handling failed for ${event.workerId}:`, err);
+          console.error(`[orbit] worker-event handling failed for ${event.workerId}:`, err);
         });
       });
     }
@@ -665,7 +665,7 @@ export class WorkerManager {
     if (!created.worktree) return;
     if (!processRan) {
       await this.worktrees.cleanup(repo.path, created.worktree, { force: true }).catch((err) => {
-        console.error(`[sig] could not undo the allocated worktree ${created.worktree}:`, err);
+        console.error(`[orbit] could not undo the allocated worktree ${created.worktree}:`, err);
       });
       return;
     }
@@ -782,7 +782,7 @@ export class WorkerManager {
         }
       }
     } catch (err) {
-      console.error("[sig] serial queue pump failed:", err);
+      console.error("[orbit] serial queue pump failed:", err);
     }
   }
 
@@ -1427,7 +1427,7 @@ export class WorkerManager {
         await this.deliverSend(worker, send.commandId, { text: send.text, intent: "auto", images: send.images });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(`[sig] deferred send failed for ${workerId}: ${message}`);
+        console.error(`[orbit] deferred send failed for ${workerId}: ${message}`);
         await this.emitEvent(workerId, "queue_returned", { texts: [send.text], reason: "undeliverable" });
       }
     }
@@ -1483,7 +1483,7 @@ export class WorkerManager {
     if (!worker || worker.state !== "idle") return;
     if (!(this.adapterOfWorkerOrNull(worker)?.isRunning?.(workerId) ?? false)) return;
     await this.stopProcess(workerId).catch((err) => {
-      console.error(`[sig] idle reclaim failed for ${workerId}:`, err);
+      console.error(`[orbit] idle reclaim failed for ${workerId}:`, err);
     });
   }
 
@@ -1549,7 +1549,7 @@ export class WorkerManager {
       try {
         await this.reconcileWorkerTail(worker);
       } catch (err) {
-        console.error(`[sig] session-tail reconciliation failed for ${worker.workerId}:`, err);
+        console.error(`[orbit] session-tail reconciliation failed for ${worker.workerId}:`, err);
       }
     }
     // Queued write workers whose runner settled or broke over the restart can start now.
@@ -2269,13 +2269,13 @@ function commandWorkerId(args: Record<string, unknown>, envelopeWorkerId: string
 
 /** §8.2/§13 (issue #16): local-only settings arriving inside a command are rejected before
  * anything runs — even a fully authenticated steward must not flip approveProject or the
- * workspace mode from afar; the owner sets them with `sig repo-config` on the machine. */
+ * workspace mode from afar; the owner sets them with `orbit repo-config` on the machine. */
 function rejectLocalOnlyArgs(args: Record<string, unknown>): void {
   for (const key of LOCAL_ONLY_ARGS) {
     if (key in args) {
       throw new CommandError(
         "local_only_setting",
-        `'${key}' is a connector-local setting; set it on the machine with 'sig repo-config' (§13)`,
+        `'${key}' is a connector-local setting; set it on the machine with 'orbit repo-config' (§13)`,
       );
     }
   }

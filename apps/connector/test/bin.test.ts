@@ -1,5 +1,5 @@
-// Subprocess tests against the built bin (bin/sig.js → dist/cli.js), which pretest
-// builds. This is the `npx @alexlikevibe/sig` surface: the Node gate, --version, usage, and
+// Subprocess tests against the built bin (bin/orbit.js → dist/cli.js), which pretest
+// builds. This is the `npx @sclfcz/orbit` surface: the Node gate, --version, usage, and
 // the read-only subcommands on a clean SIG_HOME.
 import { execFile } from "node:child_process";
 import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
@@ -57,7 +57,7 @@ function seedRegisteredRepo(repo: string, directory = stateDir): void {
   }
 }
 
-describe("bin/sig.js (skipped when dist has not been built)", () => {
+describe("bin/orbit.js (skipped when dist has not been built)", () => {
   beforeEach(() => {
     if (!existsSync(join(import.meta.dirname, "..", "dist", "cli.js"))) {
       throw new Error("dist/cli.js missing; run `npm run build` (pretest does this)");
@@ -112,7 +112,7 @@ describe("bin/sig.js (skipped when dist has not been built)", () => {
   it("status on a clean machine reports unpaired and not installed", async () => {
     const res = await run(["status"]);
     expect(res.code).toBe(0);
-    expect(res.stdout).toContain(`sig ${VERSION}`);
+    expect(res.stdout).toContain(`orbit ${VERSION}`);
     expect(res.stdout).toContain("not installed");
     expect(res.stdout).toContain("not paired");
   });

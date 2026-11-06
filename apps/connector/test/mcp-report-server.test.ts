@@ -40,7 +40,7 @@ function lines(stdout: string): Array<Record<string, unknown>> {
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
-describe("sig MCP report server (issue #17, spike §2: ~40 lines of JSON-RPC)", () => {
+describe("Orbit MCP report server (issue #17, spike §2: ~40 lines of JSON-RPC)", () => {
   it("initializes, lists the report tool, and answers ping", () => {
     const { stdout } = drive([
       { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {} } },

@@ -39,7 +39,7 @@ function spec(overrides: Partial<ServiceSpec> = {}): ServiceSpec {
   return {
     label: SIG_LABEL,
     nodePath: "/usr/local/bin/node",
-    entryPath: "/opt/pkg/bin/sig.js",
+    entryPath: "/opt/pkg/bin/orbit.js",
     args: ["daemon"],
     env: { PATH: "/usr/local/bin:/usr/bin:/bin" },
     stateDir: join(home, ".sig"),
@@ -79,7 +79,7 @@ describe("LaunchdService", () => {
     const content = readFileSync(plist, "utf8");
     expect(content).toContain(`<string>${SIG_LABEL}</string>`);
     expect(content).toContain("<string>/usr/local/bin/node</string>");
-    expect(content).toContain("<string>/opt/pkg/bin/sig.js</string>");
+    expect(content).toContain("<string>/opt/pkg/bin/orbit.js</string>");
     expect(content).toContain("<string>daemon</string>");
     expect(content).toContain("<key>KeepAlive</key>");
     expect(content).toContain("<true/>");
@@ -235,7 +235,7 @@ describe("SystemdService", () => {
     const unit = join(home, ".config/systemd/user", `${SIG_LABEL}.service`);
     expect(existsSync(unit)).toBe(true);
     const content = readFileSync(unit, "utf8");
-    expect(content).toContain("ExecStart=/usr/local/bin/node /opt/pkg/bin/sig.js daemon");
+    expect(content).toContain("ExecStart=/usr/local/bin/node /opt/pkg/bin/orbit.js daemon");
     expect(content).toContain('Environment="PATH=/usr/local/bin:/usr/bin:/bin"');
     expect(content).toContain("Restart=on-failure");
     expect(content).toContain("WantedBy=default.target");

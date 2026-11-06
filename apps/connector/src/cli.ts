@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// `npx @alexlikevibe/sig <command>` (ADR-0002; npm scope: ADR-0008).
+// `npx @sclfcz/orbit <command>` (ADR-0002; npm scope: ADR-0008).
 //
 //   connect <url> <code>   redeem a pairing code, then install + start the background
 //                          service (launchd agent on macOS, systemd --user unit on Linux);
@@ -12,7 +12,7 @@
 //   logs [-n N] [name]     tail ~/.sig/logs/<name> (default connector.log)
 //   start | stop | restart control the background service (stop also disables start-at-login)
 //   uninstall              stop the service and remove its unit (keeps ~/.sig data)
-//   upgrade [--version V]  npm-install @alexlikevibe/sig (default @latest) and restart the
+//   upgrade [--version V]  npm-install @sclfcz/orbit (default @latest) and restart the
 //                          service; the fresh daemon rewrites the versioned pi assets
 //   repo-config <path> [--isolation worktree|in-place] [--concurrency parallel|serial]
 //                          [--approve|--no-approve]
@@ -56,38 +56,38 @@ function stateDir(): string {
 }
 
 /** The bin wrapper this package ships; both src/cli.ts (dev) and dist/cli.js sit one
- * directory below the package root, so ../bin/sig.js is correct in either layout. */
+ * directory below the package root, so ../bin/orbit.js is correct in either layout. */
 export function binEntryPath(): string {
-  return join(dirname(fileURLToPath(import.meta.url)), "..", "bin", "sig.js");
+  return join(dirname(fileURLToPath(import.meta.url)), "..", "bin", "orbit.js");
 }
 
-const USAGE = `sig ${VERSION} — the Orbit connector
+const USAGE = `orbit ${VERSION} — the Orbit connector
 
 usage:
-  sig connect <url> <code> [--proxy <url>] [--foreground]
+  orbit connect <url> <code> [--proxy <url>] [--foreground]
                                           pair and install the background service; --proxy
                                           routes both channels through an HTTP proxy
                                           (issue #68; also captured from HTTPS_PROXY)
-  sig status                                 service, pairing, workers, assets
-  sig proxy [<url> | --clear] [--no-proxy <list>]
+  orbit status                                 service, pairing, workers, assets
+  orbit proxy [<url> | --clear] [--no-proxy <list>]
                                           show / set / clear the stored proxy (no_proxy
                                           bypasses hosts; loopback always bypassed)
-  sig doctor                                 pairing, service, proxy, and reachability check
-  sig logs [-n <lines>] [name]               tail ~/.sig/logs (default connector.log)
-  sig start | stop | restart                 control the background service
-  sig uninstall                              remove the service (keeps ~/.sig data)
-  sig upgrade [--version <version>]          replace the package and restart the service
-  sig repo-config <path> [options]           per-repo local settings (write isolation,
+  orbit doctor                                 pairing, service, proxy, and reachability check
+  orbit logs [-n <lines>] [name]               tail ~/.sig/logs (default connector.log)
+  orbit start | stop | restart                 control the background service
+  orbit uninstall                              remove the service (keeps ~/.sig data)
+  orbit upgrade [--version <version>]          replace the package and restart the service
+  orbit repo-config <path> [options]           per-repo local settings (write isolation,
                                                   concurrency, project trust); never settable
                                                   remotely
-  sig daemon                                 internal: run the connector daemon
+  orbit daemon                                 internal: run the connector daemon
 
 Register repositories in the web workspace under Machines > Add directory.
 
 environment:
   SIG_HOME         state directory (default ~/.sig)
   SIG_MACHINE_NAME machine name reported to the steward
-  HTTPS_PROXY      captured into the stored proxy by 'sig connect' when no --proxy is given`;
+  HTTPS_PROXY      captured into the stored proxy by 'orbit connect' when no --proxy is given`;
 
 function usage(code = 2): never {
   console.error(USAGE);
@@ -95,7 +95,7 @@ function usage(code = 2): never {
 }
 
 function fail(message: string): never {
-  console.error(`sig: ${message}`);
+  console.error(`orbit: ${message}`);
   process.exit(1);
 }
 
@@ -256,15 +256,15 @@ async function connectCommand(argv: string[]): Promise<void> {
   );
   for (const note of installer.notes) console.log(`note: ${note}`);
   console.log(`logs: ${join(dir, "logs", "connector.log")}`);
-  console.log(`next: open ${new URL("/app/machines", url)} to add a Git directory · sig status · sig logs`);
+  console.log(`next: open ${new URL("/app/machines", url)} to add a Git directory · orbit status · orbit logs`);
 }
 
 // --- status / logs ---------------------------------------------------------------------------
 
 // --- proxy / doctor (issue #68) ---------------------------------------------------------------
 
-/** `sig proxy [url] | --clear [--no-proxy <list>]`: show, set, or clear the stored proxy.
- *  The running service picks the change up on its next start (`sig restart`). */
+/** `orbit proxy [url] | --clear [--no-proxy <list>]`: show, set, or clear the stored proxy.
+ *  The running service picks the change up on its next start (`orbit restart`). */
 async function proxyCommand(argv: string[]): Promise<void> {
   const { present: noProxyPresent, value: noProxyFlag, rest: afterNoProxy } = takeFlag(argv, "--no-proxy");
   const clear = afterNoProxy.includes("--clear");
@@ -279,7 +279,7 @@ async function proxyCommand(argv: string[]): Promise<void> {
       console.log("proxy: none (not paired yet)");
       return;
     }
-    fail("not paired yet — pair with `sig connect <url> <code>` first");
+    fail("not paired yet — pair with `orbit connect <url> <code>` first");
   }
   const store = new LocalStore(dbPath);
   try {
@@ -312,18 +312,18 @@ async function noteServiceRestart(): Promise<void> {
     const installer = getServiceInstaller(serviceSpec(binEntryPath()));
     if (!installer) return;
     const status = await installer.status();
-    if (status.installed && status.running) console.log("note: run `sig restart` for the running service to pick this up");
+    if (status.installed && status.running) console.log("note: run `orbit restart` for the running service to pick this up");
   } catch {
     // Service state is a nicety here, never a failure of the command itself.
   }
 }
 
-/** `sig doctor`: pairing, service, proxy, and reachability of the steward — direct vs via
+/** `orbit doctor`: pairing, service, proxy, and reachability of the steward — direct vs via
  *  the configured proxy — with the next action spelled out. Exits non-zero when no path
  *  to the steward works. */
 async function doctorCommand(): Promise<void> {
   let healthy = true;
-  console.log(`sig ${VERSION} · node ${process.version} · ${process.platform}/${process.arch}`);
+  console.log(`orbit ${VERSION} · node ${process.version} · ${process.platform}/${process.arch}`);
 
   const [major, minor] = process.versions.node.split(".").map(Number) as [number, number, ...number[]];
   const nodeOk = major > 22 || (major === 22 && minor >= 18);
@@ -334,14 +334,14 @@ async function doctorCommand(): Promise<void> {
   let serverUrl: string | null = null;
   let config: ProxyConfig | null = null;
   if (!existsSync(dbPath)) {
-    console.log("paired:             not paired — `sig connect <url> <code>`");
+    console.log("paired:             not paired — `orbit connect <url> <code>`");
     healthy = false;
   } else {
     const store = new LocalStore(dbPath);
     try {
       const credentials = store.getCredentials();
       if (!credentials) {
-        console.log("paired:             no credentials — `sig connect <url> <code>`");
+        console.log("paired:             no credentials — `orbit connect <url> <code>`");
         healthy = false;
       } else {
         serverUrl = credentials.serverUrl;
@@ -360,11 +360,11 @@ async function doctorCommand(): Promise<void> {
       const detail = status.installed
         ? status.running
           ? `running${status.pid ? ` (pid ${status.pid})` : ""}`
-          : "installed, not running — `sig start`"
+          : "installed, not running — `orbit start`"
         : "not installed";
       console.log(`service:            ${detail} (${installer.kind})`);
     } else {
-      console.log("service:            not supported on this platform — use `sig connect --foreground`");
+      console.log("service:            not supported on this platform — use `orbit connect --foreground`");
     }
   } catch (err) {
     console.log(`service:            unknown (${err instanceof Error ? err.message : String(err)})`);
@@ -409,7 +409,7 @@ async function doctorCommand(): Promise<void> {
       console.log("direct is blocked but the configured proxy works — expected on filtered networks");
     } else if (!config) {
       healthy = false;
-      console.log(`cannot reach ${serverUrl} directly and no proxy is configured — on filtered networks: sig proxy http://127.0.0.1:7890`);
+      console.log(`cannot reach ${serverUrl} directly and no proxy is configured — on filtered networks: orbit proxy http://127.0.0.1:7890`);
     } else {
       healthy = false;
       console.log("neither direct nor the configured proxy reaches the steward — check the proxy client is running and its port");
@@ -421,7 +421,7 @@ async function doctorCommand(): Promise<void> {
 
 async function statusCommand(): Promise<void> {
   const dir = stateDir();
-  console.log(`sig ${VERSION} (node ${process.version}, ${process.platform})`);
+  console.log(`orbit ${VERSION} (node ${process.version}, ${process.platform})`);
 
   const installer = getServiceInstaller(serviceSpec(binEntryPath()));
   if (installer) {
@@ -436,7 +436,7 @@ async function statusCommand(): Promise<void> {
 
   const dbPath = join(dir, "connector.sqlite");
   if (!existsSync(dbPath)) {
-    console.log("paired:   not paired (run `sig connect <url> <code>`)");
+    console.log("paired:   not paired (run `orbit connect <url> <code>`)");
     return;
   }
   const store = new LocalStore(dbPath);
@@ -445,7 +445,7 @@ async function statusCommand(): Promise<void> {
     if (credentials) {
       console.log(`paired:   ${credentials.deviceId} → ${credentials.serverUrl} (connEpoch ${credentials.connEpoch})`);
     } else {
-      console.log("paired:   no credentials (run `sig connect <url> <code>`)");
+      console.log("paired:   no credentials (run `orbit connect <url> <code>`)");
     }
     const workers = store.listWorkers();
     const byState = new Map<string, number>();
@@ -604,7 +604,7 @@ function parseRepoConfigArgv(
   return { path: positional[0], isolation, concurrency, approve };
 }
 
-/** `sig repo-config <path> [--isolation worktree|in-place] [--concurrency parallel|serial]
+/** `orbit repo-config <path> [--isolation worktree|in-place] [--concurrency parallel|serial]
  * [--approve|--no-approve]` (§8.2/§13, issue #16): the per-repo settings that live only in the
  * connector's local store. A command from the steward carrying them is rejected; this is the
  * only writer. With no settings flags it just prints the current configuration. Works on a

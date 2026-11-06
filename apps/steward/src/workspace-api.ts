@@ -182,7 +182,7 @@ export async function handleWorkspaceApi(request: Request, url: URL, session: Ap
       const { id } = await readJson(request);
       if (typeof id !== "string" || !REQUEST_ID.test(id)) return json({ error: "bad_request" }, 400);
       const pair = await deps.pairing(id);
-      return json({ ...pair, command: `npx @alexlikevibe/sig connect ${url.origin} ${pair.code}` });
+      return json({ ...pair, command: `npx @sclfcz/orbit connect ${url.origin} ${pair.code}` });
     }
     if (url.pathname === "/app/api/settings/model/selection" && deps.selectModel) {
       const input = parseModelSwitch(await readJson(request));

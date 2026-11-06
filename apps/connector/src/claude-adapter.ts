@@ -71,7 +71,7 @@ export function mapStopReason(stopReason: unknown): string | undefined {
   }
 }
 
-/** MCP tool calls arrive namespaced (`mcp__sig__report`): never match the bare name
+/** MCP tool calls arrive namespaced (`mcp__orbit__report`): never match the bare name
  *  `report` — suffix-match instead (spike-conclusions §2). */
 export function isReportTool(name: string): boolean {
   return name.endsWith("__report");
@@ -206,7 +206,7 @@ export class ClaudeAdapter implements AgentAdapter {
       configPath,
       JSON.stringify({
         mcpServers: {
-          sig: { type: "stdio", command: process.execPath, args: [serverPath, reportFile], env: {} },
+          orbit: { type: "stdio", command: process.execPath, args: [serverPath, reportFile], env: {} },
         },
       }),
     );
@@ -254,7 +254,7 @@ export class ClaudeAdapter implements AgentAdapter {
 
     try {
       // §4.4 step 4 analog: system/init must arrive within the window, echo our session id,
-      // and show the sig MCP server connected (§15 item 1's startup self-check).
+      // and show the Orbit MCP server connected (§15 item 1's startup self-check).
       const init = await proc.waitForInit(this.options.initTimeoutMs ?? 30_000);
       const seen = typeof init.session_id === "string" ? init.session_id : "";
       if (!UUID_RE.test(sessionId) || (seen !== "" && seen !== sessionId)) {
@@ -264,12 +264,12 @@ export class ClaudeAdapter implements AgentAdapter {
         );
       }
       const mcp = Array.isArray(init.mcp_servers)
-        ? (init.mcp_servers as Array<Record<string, unknown>>).find((s) => s.name === "sig")
+        ? (init.mcp_servers as Array<Record<string, unknown>>).find((s) => s.name === "orbit")
         : undefined;
       if (mcp && typeof mcp.status === "string" && mcp.status !== "connected") {
         throw new AdapterError(
           "startup_failed",
-          `sig MCP server status '${mcp.status}': the report tool is not available; refusing to run unreported`,
+          `Orbit MCP server status '${mcp.status}': the report tool is not available; refusing to run unreported`,
         );
       }
       const handle: WorkerHandle = { workerId: spec.workerId, sessionId, cwd: spec.cwd };
@@ -656,7 +656,7 @@ export class ClaudeProcess {
         record = JSON.parse(line) as Record<string, unknown>;
       } catch {
         // §9.4: an unparseable line is logged and dropped; do not terminate.
-        this.stderrTail += `\n[sig] unparseable stdout line: ${line.slice(0, 200)}\n`;
+        this.stderrTail += `\n[orbit] unparseable stdout line: ${line.slice(0, 200)}\n`;
         continue;
       }
       if (record.type === "system" && record.subtype === "init" && this.initWaiter) {
@@ -680,7 +680,7 @@ export class ClaudeProcess {
   private handleExit(code: number | null, signal: NodeJS.Signals | null, error?: Error): void {
     if (this.exited) return;
     this.exited = true;
-    if (error) this.appendStderr(Buffer.from(`\n[sig] spawn error: ${error.message}\n`));
+    if (error) this.appendStderr(Buffer.from(`\n[orbit] spawn error: ${error.message}\n`));
     if (this.initWaiter) {
       const waiter = this.initWaiter;
       this.initWaiter = null;

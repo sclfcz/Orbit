@@ -1,10 +1,10 @@
 {
-  "name": "@alexlikevibe/sig",
+  "name": "@sclfcz/orbit",
   "version": "0.1.3",
   "description": "Orbit connector: pairs this machine with your Orbit workspace and runs local coding agents as a background service.",
   "type": "module",
   "bin": {
-    "sig": "bin/sig.js"
+    "orbit": "bin/orbit.js"
   },
   "files": [
     "bin",
@@ -41,5 +41,7 @@
     "https-proxy-agent": "^9.1.0",
     "undici": "^8.12.3"
   },
-  "private": true
+  "publishConfig": {
+    "access": "public"
+  }
 }

@@ -33,13 +33,13 @@ export interface DaemonHandle {
 export async function runDaemon(options: DaemonOptions): Promise<DaemonHandle> {
   const dbPath = join(options.stateDir, "connector.sqlite");
   if (!existsSync(dbPath)) {
-    throw new Error(`not paired: no local store at ${dbPath}; run \`sig connect <url> <code>\` first`);
+    throw new Error(`not paired: no local store at ${dbPath}; run \`orbit connect <url> <code>\` first`);
   }
   const store = new LocalStore(dbPath);
   const credentials = store.getCredentials();
   if (!credentials) {
     store.close();
-    throw new Error("not paired: no credentials in the local store; run `sig connect <url> <code>` first");
+    throw new Error("not paired: no credentials in the local store; run `orbit connect <url> <code>` first");
   }
 
   // The device token is the one secret the daemon holds; the logger scrubs it from every line.
@@ -62,7 +62,7 @@ export async function runDaemon(options: DaemonOptions): Promise<DaemonHandle> {
     extension: assets.extensionPath,
   });
 
-  // Issue #68: a proxy stored by `sig connect --proxy` / `sig proxy` is activated at boot —
+  // Issue #68: a proxy stored by `orbit connect --proxy` / `orbit proxy` is activated at boot —
   // env for children (git, pi workers), a global EnvHttpProxyAgent for fetch, a per-URL
   // agent for the WebSocket. Nothing rides on the service unit's environment.
   const resolved = resolveProxyConfig({ stored: store.getProxyConfig(), env: process.env });
@@ -97,7 +97,7 @@ export async function runDaemon(options: DaemonOptions): Promise<DaemonHandle> {
       if (code === 1006 && ++abnormalCloses === 3 && !hinted) {
         hinted = true;
         logger.warn("connection_hint", {
-          hint: "repeated abnormal closes: if the steward is only reachable through a proxy, set one with `sig proxy <url>` and diagnose with `sig doctor`",
+          hint: "repeated abnormal closes: if the steward is only reachable through a proxy, set one with `orbit proxy <url>` and diagnose with `orbit doctor`",
         });
       }
     },

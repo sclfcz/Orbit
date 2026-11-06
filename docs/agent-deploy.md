@@ -96,5 +96,5 @@ Needed when workers.dev is unreachable (mainland China) or the owner wants their
 - **Orbit answers "模型服务拒绝了这个 API key"** — the pasted key is invalid or expired; the owner re-pastes in Settings. The provider's exact error is recorded in the channel log as `model_call_error`.
 - **Orbit answers "还没有配置模型 key"** — step 5 hasn't happened; the workspace's notice carries an Add-key button.
 - **wrangler fails to reach Cloudflare from mainland China** — set `HTTPS_PROXY`; `wrangler tail` needs it explicitly. A proxy that blocks the deployment's hostname: `curl --noproxy '*'` for verification steps.
-- **The connector reconnect-loops after a redeploy** — resident isolate again; its retry loop self-heals within a minute. Minutes of looping, then check `sig status` and `sig logs`.
+- **The connector reconnect-loops after a redeploy** — resident isolate again; its retry loop self-heals within a minute. Minutes of looping, then check `orbit status` and `orbit logs`.
 - **Explicit `SERVER_KEY` lost** — it cannot be re-derived. Mint a replacement, keep the old key in `SERVER_KEY_PREVIOUS` while machines reconnect (see [deploy.md](deploy.md#secrets-and-rotation)), and re-pair machines that miss the window. Fresh generated-key deployments have no `SERVER_KEY`; preserve their Durable Object storage instead.

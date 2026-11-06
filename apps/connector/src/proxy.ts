@@ -6,7 +6,7 @@
 // childEnv) inherit it — the background service itself needs no proxy entries in its unit.
 //
 // Precedence (`resolveProxyConfig`): an explicit `--proxy` flag beats a stored config
-// beats the connecting shell's HTTPS_PROXY (which `sig connect` promotes into storage, so
+// beats the connecting shell's HTTPS_PROXY (which `orbit connect` promotes into storage, so
 // the launchd/systemd daemon never depends on an inherited environment).
 //
 // Security: a proxy URL may carry credentials (`http://user:pass@host`); `proxyLogFields`

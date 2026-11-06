@@ -90,7 +90,7 @@ Deploy authentication changes to the whole Worker version. Do not use gradual de
 Not required for function anymore (there is no chat platform that must reach you), but **mainland users should bind one**: `*.workers.dev` is blocked there outright (DNS pollution + SNI reset, live-tested in the spike), and the API, the web app, and the connector's WebSocket all need to reach the deployment. The agent runbook keeps this as an appendix attached only when workers.dev is unreachable.
 
 1. Dashboard → **Workers & Pages** → your Orbit Worker → **Settings → Domains & Routes** → **Add → Custom domain**, e.g. `orbit.example.com` (a zone hosted on Cloudflare DNS). Cloudflare creates the DNS record and the certificate.
-2. Use `https://orbit.example.com` everywhere: API calls, `sig connect`, web links.
+2. Use `https://orbit.example.com` everywhere: API calls, `orbit connect`, web links.
 
 Passkeys are bound to the deployment hostname by WebAuthn. If you add or change the custom domain later, sign in with the password on the new hostname and register a new passkey there; recovery and rate limits remain deployment-wide.
 
@@ -114,7 +114,7 @@ The daily budget soft cap (issue #28): `vars.DAILY_BUDGET_USD` (dollars per UTC 
 
 ## Connecting a machine
 
-For agent-guided setup, follow [agent-connect.md](agent-connect.md), including a source-install fallback if the npm package is unavailable. Install the CLI with `npm install --global @alexlikevibe/sig` (or that source fallback) before using the `sig` management commands below.
+For agent-guided setup, follow [agent-connect.md](agent-connect.md), including a source-install fallback if the npm package is unavailable. Install the CLI with `npm install --global @sclfcz/orbit` (or that source fallback) before using the `orbit` management commands below.
 
 Each machine you want to dispatch work to runs a small daemon that holds a WebSocket to the steward and drives the local coding agents. Open **Machines** in the workspace and generate the connection command there.
 
@@ -122,25 +122,25 @@ Existing explicit-key deployments can also request a pairing code through the ow
 
 ```sh
 curl -X POST https://orbit.example.com/api/pairing -H "Authorization: Bearer $SERVER_KEY"
-# → { "code": "AB12CD34", "command": "npx @alexlikevibe/sig connect https://orbit.example.com AB12CD34" }
+# → { "code": "AB12CD34", "command": "npx @sclfcz/orbit connect https://orbit.example.com AB12CD34" }
 ```
 
 Run that command on the machine (macOS or Linux, Node ≥ 22.18). It pairs (redeeming the one-time code), installs a background service — launchd agent (`dev.sig.connector`) on macOS, systemd user unit on Linux — and starts it now and at login. `connect --foreground` runs attached instead (containers, dev boxes). On filtered networks append `--proxy http://127.0.0.1:7890` (issue #68): both channels, `git`, and worker children follow it, and it is stored so the service needs no inherited environment.
 
-In the workspace's **Machines** page, choose **Add directory** on the online machine to register each existing directory. Orbit detects a Git repository automatically; a plain directory registers too, with no branch, worktree isolation, or PR support. Registration updates the machine and the workspace without a restart. Project approval and write policy remain local settings managed with `sig repo-config`.
+In the workspace's **Machines** page, choose **Add directory** on the online machine to register each existing directory. Orbit detects a Git repository automatically; a plain directory registers too, with no branch, worktree isolation, or PR support. Registration updates the machine and the workspace without a restart. Project approval and write policy remain local settings managed with `orbit repo-config`.
 
 Day-to-day:
 
 ```sh
-sig repo-config ~/code/myproject --isolation worktree --concurrency serial   # worktree (default) | in-place isolation; parallel (default) | serial concurrency
-sig repo-config ~/code/myproject --approve            # trust the repo's local pi extensions (§13)
-sig status                       # service, pairing, workers, installed assets
-sig proxy [url]                  # show/set the stored proxy; --clear removes it (issue #68)
-sig doctor                       # pairing, service, proxy, reachability diagnosis (issue #68)
-sig logs                         # tail ~/.sig/logs/connector.log (no keys, no session content)
-sig stop | start | restart       # control the service
-sig upgrade                      # npm-install the latest package and restart the service
-sig uninstall                    # remove the service (keeps ~/.sig data)
+orbit repo-config ~/code/myproject --isolation worktree --concurrency serial   # worktree (default) | in-place isolation; parallel (default) | serial concurrency
+orbit repo-config ~/code/myproject --approve            # trust the repo's local pi extensions (§13)
+orbit status                       # service, pairing, workers, installed assets
+orbit proxy [url]                  # show/set the stored proxy; --clear removes it (issue #68)
+orbit doctor                       # pairing, service, proxy, reachability diagnosis (issue #68)
+orbit logs                         # tail ~/.sig/logs/connector.log (no keys, no session content)
+orbit stop | start | restart       # control the service
+orbit upgrade                      # npm-install the latest package and restart the service
+orbit uninstall                    # remove the service (keeps ~/.sig data)
 ```
 
 State lives under `~/.sig/` (`SIG_HOME` to move it). Prerequisites: the coding agent you intend to use (pi first, Claude Code next) already installed and logged in — Orbit never touches the agent's own credentials. Revoke a machine any time from the workspace (机器 → 撤销): its token dies immediately (close code 4403).
@@ -175,4 +175,4 @@ Why the `wrangler deploy` in between matters: a resident Durable Object isolate 
 
 ## Updates
 
-`git pull && wrangler deploy` updates the steward. On each machine, `sig upgrade` npm-installs the latest connector package and restarts the service; the fresh daemon rewrites its versioned pi assets on boot (old versions stay on disk for sessions still referencing them).
+`git pull && wrangler deploy` updates the steward. On each machine, `orbit upgrade` npm-installs the latest connector package and restarts the service; the fresh daemon rewrites its versioned pi assets on boot (old versions stay on disk for sessions still referencing them).

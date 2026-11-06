@@ -147,10 +147,10 @@ describe("report cards carry the one-time 查看详情 link", () => {
 });
 
 describe("/加机器: chat-issued pairing (protocol §5.2)", () => {
-  it("replies with npx @alexlikevibe/sig connect <url> <code>, single-use", async () => {
+  it("replies with npx @sclfcz/orbit connect <url> <code>, single-use", async () => {
     await ownerDm("/加机器");
     const text = (await sentTexts()).join("\n");
-    const match = text.match(/npx @alexlikevibe\/sig connect (\S+) (\w{8})/);
+    const match = text.match(/npx @alexlikevibe\/orbit connect (\S+) (\w{8})/);
     expect(match).not.toBeNull();
     expect(match![1]).toBe("https://example.com"); // origin learned from the webhook hit
 

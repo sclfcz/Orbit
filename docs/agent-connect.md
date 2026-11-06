@@ -7,22 +7,22 @@ You are a coding agent running on a computer the owner wants to connect to an ex
 - Confirm this is the machine that will run coding agents. Ask for the existing Orbit HTTPS URL and the local repository paths the owner wants to connect.
 - Check macOS or Linux, Node ≥ 22.18 (`node -v`), npm, and git. Background mode uses launchd on macOS and a systemd user service on Linux. For a container or a machine without a supported service manager, use foreground mode and explain that its terminal must stay open.
 - Check the intended local coding agent: pi (`pi --version`) is the default; installed Claude Code (`claude --version`) is also supported. These CLIs are separate from the connector. If missing, install the owner's chosen agent using its official instructions. Have the owner complete its login or provider setup directly, keeping credentials out of chat and logs. The cloud model key does not configure the local coding agent.
-- If `sig` is already installed, run `sig status` first. Preserve a correct pairing. If it points to a different deployment, confirm the intended replacement before pairing again.
+- If `orbit` is already installed, run `orbit status` first. Preserve a correct pairing. If it points to a different deployment, confirm the intended replacement before pairing again.
 - Check for `SIG_HOME` overrides without dumping the environment. A custom state directory cannot install the shared background service; resolve the intended setup or use `--foreground`.
-- Verify that the deployment URL is reachable. An unauthenticated `GET /app` returning 401 is expected. On a network where the URL is only reachable through a local HTTP proxy (filtered networks, mainland China), connect with `sig connect <url> <code> --proxy http://127.0.0.1:7890` — both channels (fetch, WebSocket), the connector's `git` calls, and worker children follow it, and the choice is stored so the background service needs no inherited environment. An `HTTPS_PROXY` already set in the shell is captured automatically; `sig doctor` diagnoses direct-vs-proxy reachability when things fail.
+- Verify that the deployment URL is reachable. An unauthenticated `GET /app` returning 401 is expected. On a network where the URL is only reachable through a local HTTP proxy (filtered networks, mainland China), connect with `orbit connect <url> <code> --proxy http://127.0.0.1:7890` — both channels (fetch, WebSocket), the connector's `git` calls, and worker children follow it, and the choice is stored so the background service needs no inherited environment. An `HTTPS_PROXY` already set in the shell is captured automatically; `orbit doctor` diagnoses direct-vs-proxy reachability when things fail.
 
 Do not read credential stores or ask the owner to paste SERVER_KEY, model keys, login links, or device tokens into chat. Pairing needs a short-lived code, not the owner's permanent SERVER_KEY.
 
 ## 1 · Install the connector
 
-If the public npm package is available (`npm view @alexlikevibe/sig version`), install it to a stable location:
+If the public npm package is available (`npm view @sclfcz/orbit version`), install it to a stable location:
 
 ```sh
-npm install --global @alexlikevibe/sig
-sig --version
+npm install --global @sclfcz/orbit
+orbit --version
 ```
 
-Use the owner's normal Node installation and a user-writable npm prefix; do not reach for `sudo` to fix permissions. A global install gives the background service a stable executable path and makes the `sig` command available for later steps.
+Use the owner's normal Node installation and a user-writable npm prefix; do not reach for `sudo` to fix permissions. A global install gives the background service a stable executable path and makes the `orbit` command available for later steps.
 
 ### If the package is not yet published
 
@@ -31,14 +31,14 @@ An npm 404 is not a successful installation. Use an accessible checkout of [sclf
 ```sh
 git clone https://github.com/sclfcz/Orbit && cd Orbit   # or use an existing checkout
 pnpm install
-pnpm --filter @alexlikevibe/sig build
-sig_package_dir="$(mktemp -d)"
-npm pack ./apps/connector --ignore-scripts --pack-destination "$sig_package_dir"
-npm install --global "$sig_package_dir"/alexlikevibe-sig-*.tgz
-sig --version
+pnpm --filter @sclfcz/orbit build
+orbit_package_dir="$(mktemp -d)"
+npm pack ./apps/connector --ignore-scripts --pack-destination "$orbit_package_dir"
+npm install --global "$orbit_package_dir"/sclfcz-orbit-*.tgz
+orbit --version
 ```
 
-The built tarball contains the CLI and its assets, so the installed service does not depend on the checkout or an npx cache. If installing an update over a running connector, run `sig restart` afterwards. Until the npm package is published, update by repeating this source-install procedure instead of `sig upgrade`. For network or registry errors other than a missing package, diagnose the error rather than treating it as proof the package is unpublished.
+The built tarball contains the CLI and its assets, so the installed service does not depend on the checkout or an npx cache. If installing an update over a running connector, run `orbit restart` afterwards. Until the npm package is published, update by repeating this source-install procedure instead of `orbit upgrade`. For network or registry errors other than a missing package, diagnose the error rather than treating it as proof the package is unpublished.
 
 ## 2 · Pair with the personal agent
 
@@ -47,18 +47,18 @@ Have the owner open the existing Orbit web workspace and go to **Machines → Ad
 The workspace generates a command shaped like:
 
 ```sh
-npx @alexlikevibe/sig connect https://orbit.example.com <pairing-code>
+npx @sclfcz/orbit connect https://orbit.example.com <pairing-code>
 ```
 
 Use the installed CLI with the URL and code from that command (append `--proxy <url>` on filtered networks — see step 0):
 
 ```sh
-sig connect https://orbit.example.com <pairing-code>
+orbit connect https://orbit.example.com <pairing-code>
 ```
 
 The owner can run it directly in their terminal, keeping the pairing code out of the agent transcript. With an authorized browser session, an agent may carry out pairing without repeating the code in its report. Use the final reachable deployment URL and do not reuse a code from an example.
 
-`connect` saves the device credentials, installs the background service, and starts it. On a machine without launchd/systemd user services, use `sig connect <url> <code> --foreground` in a persistent terminal instead. If the code expires or has already been used, generate a fresh one in the workspace. If the owner cannot sign in, follow [browser access recovery](deploy.md#recover-browser-access). Never ask for a password or SERVER_KEY in chat.
+`connect` saves the device credentials, installs the background service, and starts it. On a machine without launchd/systemd user services, use `orbit connect <url> <code> --foreground` in a persistent terminal instead. If the code expires or has already been used, generate a fresh one in the workspace. If the owner cannot sign in, follow [browser access recovery](deploy.md#recover-browser-access). Never ask for a password or SERVER_KEY in chat.
 
 ## 3 · Register the selected repositories
 
@@ -70,19 +70,19 @@ Keep the default `worktree` isolation unless the owner wants a different write p
 
 ## 4 · Verify the full connection
 
-1. Run `sig status`. Confirm the intended deployment, installed/running service (or the live foreground process), and registered repositories. A saved pairing alone does not prove the WebSocket is connected.
-2. Check recent `sig logs -n 50` for a `welcomed` event and confirm the machine is **online** in the workspace's Machines page, with the expected repositories and agents. Fix repeated connection failures before continuing.
+1. Run `orbit status`. Confirm the intended deployment, installed/running service (or the live foreground process), and registered repositories. A saved pairing alone does not prove the WebSocket is connected.
+2. Check recent `orbit logs -n 50` for a `welcomed` event and confirm the machine is **online** in the workspace's Machines page, with the expected repositories and agents. Fix repeated connection failures before continuing.
 3. Ask Orbit in the workspace to run a small read-only task using **pi**, for example: “On this machine, use pi to summarize the README in this repository. Do not modify files.” Verify that the task returns a result and its session record opens. Claude Code's adapter does not support Orbit's read-only mode; if only Claude Code is configured, report that the read-only check is pending rather than claiming it passed or silently dispatching a write-capable task.
 
 Hand over the machine name, connected repositories, and the observed task result. Explain that the computer must stay awake and connected, and give the owner these management commands:
 
 ```sh
-sig status
-sig logs -n 50
-sig stop
-sig start
-sig restart
-sig uninstall   # removes the service, preserves local state
+orbit status
+orbit logs -n 50
+orbit stop
+orbit start
+orbit restart
+orbit uninstall   # removes the service, preserves local state
 ```
 
 State is stored in `~/.sig/`. The owner can revoke a machine from the workspace at any time. See [deploy.md](deploy.md) for updates and operations, and [usage.md](usage.md) for agent behavior and session viewing.

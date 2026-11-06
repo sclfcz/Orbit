@@ -58,7 +58,7 @@ export class Logger {
       // A logger must never take the daemon down (disk full, state dir removed at shutdown);
       // stderr still reaches launchd/journal for post-mortem.
       try {
-        process.stderr.write(`[sig] log write failed: ${line}\n`);
+        process.stderr.write(`[orbit] log write failed: ${line}\n`);
       } catch {
         // nothing left to try
       }

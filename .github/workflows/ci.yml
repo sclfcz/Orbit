@@ -30,14 +30,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r typecheck
       - run: pnpm -r test
-      # Issue #26: the private connector source package must retain its self-contained tarball layout —
+      # Issue #26: the Orbit connector package must retain its self-contained tarball layout —
       # bundled dist, bin wrapper, zero runtime dependencies (workspace deps stay in dev).
       # Fail the build if the layout regresses.
       - name: connector tarball layout
         run: |
           cd apps/connector
           npm pack --dry-run 2>&1 | tee /tmp/pack.log
-          for f in dist/cli.js dist/ext/sig-pi.ts bin/sig.js; do
+          for f in dist/cli.js dist/ext/sig-pi.ts bin/orbit.js; do
             grep -q " $f$" /tmp/pack.log || { echo "tarball is missing $f"; exit 1; }
           done
           node -e "const p=require('./package.json'); \

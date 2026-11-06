@@ -333,7 +333,7 @@ export class ConnectorClient {
       this.commands.settle(cmd.id, result);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ERR_INVALID_STATE") throw err;
-      console.error("[sig] late command settle skipped (store closed):", cmd.id);
+      console.error("[orbit] late command settle skipped (store closed):", cmd.id);
       return;
     }
     this.send(ws, { t: "cmd_result", re: cmd.id, ok: result.ok, data: result.data, error: result.error });

@@ -1,6 +1,6 @@
 // Native proxy support (issue #68): URL normalization, no_proxy matching, env export,
 // precedence resolution, process-wide activation, and a real forward-proxy round trip for
-// the fetch channel (the wiring `sig doctor` and the daemon rely on).
+// the fetch channel (the wiring `orbit doctor` and the daemon rely on).
 import { createServer, type Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { getGlobalDispatcher, setGlobalDispatcher, EnvHttpProxyAgent, fetch as undiciFetch, type Dispatcher } from "undici";
