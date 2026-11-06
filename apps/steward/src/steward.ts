@@ -13,7 +13,7 @@
 // memory module (ledger.ts); this class only wires it to the transports.
 //
 // The steward LLM (issue #6, steward.md §4-§6): a PiHarness root session with the
-// `sig-steward` extension — user messages get their reply from the model (sh_run + alarm
+// `orbit-steward` extension — user messages get their reply from the model (sh_run + alarm
 // poll, §6.3), worker events wake it for bookkeeping through the durable wake queue (§5.1/
 // §5.4), and in event-triggered runs its plain text is discarded by structure (§6.2): only
 // notify_user / ask_user reach the user.

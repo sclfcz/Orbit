@@ -1,5 +1,5 @@
 {
-  "name": "sig",
+  "name": "orbit",
   "private": true,
   "type": "module",
   "engines": {
@@ -17,7 +17,7 @@
   "cloudflare": {
     "bindings": {
       "LOGIN_PASSWORD": {
-        "description": "**At least 15 characters.** Generate and save a unique password with your password manager. Sig checks this password after deployment and rejects short, common, or compromised passwords. If rejected, replace LOGIN_PASSWORD under Worker > Settings > Variables and Secrets and deploy the change. Use this password to sign in at the Worker URL."
+        "description": "**At least 15 characters.** Generate and save a unique password with your password manager. Orbit checks this password after deployment and rejects short, common, or compromised passwords. If rejected, replace LOGIN_PASSWORD under Worker > Settings > Variables and Secrets and deploy the change. Use this password to sign in at the Worker URL."
       }
     }
   },

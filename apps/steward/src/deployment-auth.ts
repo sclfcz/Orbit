@@ -90,7 +90,7 @@ export async function screenPassword(password: string, fetchImpl: typeof fetch =
   const response = await fetchImpl(`https://api.pwnedpasswords.com/range/${hash.slice(0, 5)}`, {
     headers: {
       "Add-Padding": "true",
-      "User-Agent": "Sig deployment password screening (https://github.com/iefnaf/sig)",
+      "User-Agent": "Orbit deployment password screening (https://github.com/sclfcz/Orbit)",
     },
     signal: AbortSignal.timeout(5000),
   });

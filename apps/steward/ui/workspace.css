@@ -5,9 +5,9 @@
   --ink: #292e2a;
   --muted: #777c75;
   --line: #e8e9e2;
-  --green: #37624d;
-  --green-dark: #284c3b;
-  --green-soft: #eaf0e9;
+  --green: #087dad;
+  --green-dark: #075d88;
+  --green-soft: #e8f7fb;
   --amber: #a36b25;
   --amber-soft: #faf2e2;
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -30,7 +30,7 @@ button > [data-icon], a > [data-icon] { display: inline-flex; }
 .workspace { display: grid; --sidebar-size: 244px; --context-size: 300px; grid-template-columns: var(--sidebar-size) minmax(0, 1fr) var(--context-size); grid-template-rows: 58px minmax(0, 1fr); height: 100vh; height: 100dvh; overflow: hidden; }
 .topbar { grid-column: 1 / -1; display: flex; align-items: center; gap: 24px; padding: 0 22px; border-bottom: 1px solid var(--line); background: var(--surface); }
 .brand { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
-.brand-mark { display: block; width: 32px; height: 32px; }
+.brand-mark { display: block; width: 32px; height: 32px; border-radius: 8px; object-fit: cover; background: #06101f; }
 .brand-wordmark { display: block; width: 44px; height: 24px; }
 .workspace-label { color: #94978f; font-size: 11px; font-weight: 400; letter-spacing: .3px; margin-left: 5px; padding-left: 15px; border-left: 1px solid var(--line); }
 .global-status, .running-status, .status-button, .topbar-end { display: flex; align-items: center; gap: 8px; }
@@ -118,7 +118,7 @@ h1 { font-size: 18px; font-weight: 600; line-height: 1.5; margin: 0; letter-spac
 .message { margin-bottom: 26px; }
 .message:last-child { margin-bottom: 0; }
 .message-header { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; font-size: 12px; font-weight: 550; }
-.agent-avatar { display: block; width: 26px; height: 26px; padding: 1px; border-radius: 7px; background: #edf0e5; }
+.agent-avatar { display: block; width: 26px; height: 26px; padding: 0; border-radius: 7px; object-fit: cover; background: #06101f; }
 .brand-word { font-weight: 700; letter-spacing: -.03em; font-size: 17px; }
 .message-time { font-size: 10px; color: #8a937d; font-weight: 400; margin-left: 2px; }
 .message-body { padding-left: 30px; line-height: 1.9; font-size: 14px; color: #424d3b; }
@@ -478,7 +478,7 @@ a.button { text-decoration: none; }
 /* full-page states: signed out, workspace unreachable */
 .fatal { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 24px; background: var(--page); }
 .fatal-box { max-width: 420px; text-align: center; }
-.fatal-box img { width: 44px; height: 44px; margin: 0 auto 14px; }
+.fatal-box img { width: 44px; height: 44px; margin: 0 auto 14px; border-radius: 10px; object-fit: cover; }
 .fatal-box h2 { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
 .fatal-box p { margin: 0 0 8px; font-size: 13px; line-height: 1.8; color: #6c7860; }
 

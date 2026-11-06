@@ -7,7 +7,7 @@
 // (including self-attested "packed", which platform authenticators commonly use alongside
 // "none"), signature verification and sign-counter regression check are all done by
 // @simplewebauthn/server itself (Web-Crypto based, so it runs on Workers without leaning on
-// nodejs_compat) — this module is a thin adapter from Sig's own minimal wire shape and typed
+// nodejs_compat) — this module is a thin adapter from Orbit's own minimal wire shape and typed
 // result/error types to that library's richer `*ResponseJSON` shapes, not a reimplementation.
 import {
   verifyRegistrationResponse as libVerifyRegistration,
@@ -70,14 +70,14 @@ function str(value: unknown): string | null {
 /**
  * The library's `*ResponseJSON.id`/`.rawId` are only checked against each other and for the
  * "public-key" credential type (verified by reading its source) — never used in any
- * cryptographic step, so a fixed placeholder here is correct, not a shortcut: Sig's own wire
+ * cryptographic step, so a fixed placeholder here is correct, not a shortcut: Orbit's own wire
  * format carries no separate id/rawId fields (the credential id lives inside attestationObject
  * for registration, and is matched by web.ts's own SELECT before an assertion ever reaches
  * this file).
  */
 const UNUSED_ID = "AA";
 
-/** Maps the library's message-only Error into one of Sig's typed reasons. Best-effort: the
+/** Maps the library's message-only Error into one of Orbit's typed reasons. Best-effort: the
  *  library does not export error subtypes, so this is a substring match over its (stable,
  *  English, hand-written) messages rather than a discriminated catch. */
 function translateError(err: unknown): WebauthnVerifyError {

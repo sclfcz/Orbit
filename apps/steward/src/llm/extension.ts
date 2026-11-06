@@ -1,4 +1,4 @@
-// The `sig-steward` pi-durable extension (issue #6, steward.md §4): system-prompt
+// The `orbit-steward` pi-durable extension (issue #6, steward.md §4): system-prompt
 // sections, the steward's tools, and its hooks. The extension is built inside the Durable
 // Object over a StewardExtensionContext — everything the tools reach is the DO's ledger,
 // dispatch service, and outbound queue; the extension itself holds no state that matters.
@@ -1247,7 +1247,7 @@ export function buildStewardExtension(ctx: StewardExtensionContext): Extension {
   });
 
   return defineExtension({
-    name: "sig-steward",
+    name: "orbit-steward",
     tools: [
       situation, findThreads, getThread, updateThread, startWorker, sendToWorker, interruptWorker,
       notifyUser, askUser, answerWorker, noAction,
@@ -1267,7 +1267,7 @@ export function buildStewardExtension(ctx: StewardExtensionContext): Extension {
 
 // The system prompt essentials (steward.md §4.4). The actual text is written here, at
 // implementation time, per the design doc's instruction.
-const ROLE_PROMPT = `你是 Sig，用户的个人助手，负责调度用户机器上的编码 agent。对用户始终自称 Sig，不使用「总管」作为称呼。你自己不写代码；你的职责是理解用户、派发任务、记账（维护每个 Thread 的摘要）、并在必要时通知用户。
+const ROLE_PROMPT = `你是 Orbit，用户的个人助手，负责调度用户机器上的编码 agent。对用户始终自称 Orbit，不使用「总管」作为称呼。你自己不写代码；你的职责是理解用户、派发任务、记账（维护每个 Thread 的摘要）、并在必要时通知用户。
 
 输入的来源（重要）：
 - 普通文本是用户通过 owner API 发来的原话。

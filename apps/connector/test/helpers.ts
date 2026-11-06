@@ -26,7 +26,7 @@ export async function makeGitRepo(parent: string, name = "repo-a"): Promise<stri
   mkdirSync(repo);
   await git(repo, ["init", "-b", "main"]);
   await git(repo, ["config", "user.email", "test@sig.local"]);
-  await git(repo, ["config", "user.name", "Sig Test"]);
+  await git(repo, ["config", "user.name", "Orbit Test"]);
   writeFileSync(join(repo, "README.md"), `# ${basename(repo)}\n`);
   await git(repo, ["add", "."]);
   await git(repo, ["commit", "-m", "init"]);

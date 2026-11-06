@@ -313,7 +313,7 @@ class SystemdService implements ServiceInstaller {
       .map((part) => (part.includes(" ") ? `"${part}"` : part))
       .join(" ");
     return `[Unit]
-Description=Sig connector daemon
+Description=Orbit connector daemon
 Wants=network-online.target
 After=network-online.target
 StartLimitIntervalSec=300

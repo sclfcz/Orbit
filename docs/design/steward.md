@@ -25,7 +25,7 @@ This document designs the half that lives inside the Durable Object: **the memor
  Feishu / web / connectors              (remaining layers: see the protocol and connector designs)
         │
  ┌──────▼───────────────────────────────────────────────────────────────────────────────┐
- │ Sig DO (singleton "owner", an Agents SDK Agent)                                        │
+ │ Orbit DO (singleton "owner", an Agents SDK Agent)                                        │
  │                                                                                        │
  │  Channel adapters        Protocol gateway             Web read model                   │
  │  (dedup in, send out)    (connector/browser, outbox)  (timeline, memory page)          │
@@ -42,7 +42,7 @@ This document designs the half that lives inside the Durable Object: **the memor
  │  │   Notes                              │       └────────────────────────────────────┘ │
  │  │   retrieval / forgetting / summaries │                                              │
  │  └──────────────────────────────────────┘                                              │
- │          one shared SQLite (Sig's tables + pi-durable's own tables)                    │
+ │          one shared SQLite (Orbit's tables + pi-durable's own tables)                    │
  └──────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -296,7 +296,7 @@ Re-run this evaluation set whenever the model, prompts, or candidate-assembly ru
 ### 4.1 Form
 
 - The **root session** of a `PiHarness`; it never ends, and pi-durable compacts the context automatically.
-- A pi-durable extension (`sig-steward`) supplies the system-prompt sections, tools, and hooks.
+- A pi-durable extension (`orbit-steward`) supplies the system-prompt sections, tools, and hooks.
 - What each turn sees:
 
 | Content | Where | Why |
@@ -371,7 +371,7 @@ For `unsafe` tools the command ID is taken from the tool task ID: `cmdId = "tool
 
 (The actual text is written at implementation time; these are the rules it must contain.)
 
-1. You are Sig's steward: you never write code yourself; you only dispatch and remember.
+1. You are Orbit's steward: you never write code yourself; you only dispatch and remember.
 2. Input starting with `⟦` is not something the user said — it is a system event. In event-triggered runs, **do not emit user-facing text**: call `notify_user` when the user must be notified, `no_action` when there is nothing to do.
 3. Read the situation brief before every action; when routing is uncertain you must `ask_user` — never guess.
 4. Reports have exactly three parts, in a fixed format, kept short.
@@ -700,7 +700,7 @@ Legend: ✓ verified in the protocol spike; ◦ seen only in docs or type declar
 | Event-triggered `submit` resumes via alarm after the DO is reset | ✓ |
 | `PiHarness.pending()`, `messages()` | ✓ |
 | `PiHarness.wait(operationId)` returns the final text | ✓ (issue #6: pending/wait/not_found all exercised by tests) |
-| `defineTool`, `section`, `hook(ToolTask, beforeTool)` in extensions | ✓ (issue #6: the sig-steward extension is built on them) |
+| `defineTool`, `section`, `hook(ToolTask, beforeTool)` in extensions | ✓ (issue #6: the orbit-steward extension is built on them) |
 | `api.taskId` inside tools is stable across replays and usable as an idempotency key | ✓ (issue #6: `cmdId = "tool:" + api.taskId`; replays converge on the existing outbox row) |
 | The `beforeRequest` hook replaces only the single request and persists nothing | ✓ (issue #6: verified by test — see §4.1) |
 | A tool result's `control.terminate` ends the turn | ✓ (issue #6: ask_user / no_action terminate) |

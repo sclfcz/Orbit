@@ -52,7 +52,7 @@ describe.skipIf(!LIVE)("pr_worker against a real repo (issue #21 AC5)", () => {
     const clone = join(dir, "clone");
     await exec("git", ["clone", `https://github.com/${who}/${repoName}.git`, clone]);
     await git(clone, ["config", "user.email", "verify@sig.local"]);
-    await git(clone, ["config", "user.name", "Sig Verify"]);
+    await git(clone, ["config", "user.name", "Orbit Verify"]);
 
     // 2. Seed main, then the worker branch with one commit — the state a settled write task leaves.
     writeFileSync(join(clone, "README.md"), `# ${repoName}\n`);

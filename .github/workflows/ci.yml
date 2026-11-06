@@ -30,7 +30,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r typecheck
       - run: pnpm -r test
-      # Issue #26: the connector must ship as a self-contained `@alexlikevibe/sig` tarball —
+      # Issue #26: the private connector source package must retain its self-contained tarball layout —
       # bundled dist, bin wrapper, zero runtime dependencies (workspace deps stay in dev).
       # Fail the build if the layout regresses.
       - name: connector tarball layout

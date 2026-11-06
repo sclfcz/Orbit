@@ -3,7 +3,7 @@
 // does not.
 
 /** A user-triggered run settled without an answer: the model call failed or was interrupted. */
-export const FAILED_RUN_NOTICE = "⚠️ Sig 暂时无法回复：模型请求未完成。请在「设置 → 模型服务」中测试连接，确认可用后重新发送这条消息。";
+export const FAILED_RUN_NOTICE = "⚠️ Orbit 暂时无法回复：模型请求未完成。请在「设置 → 模型服务」中测试连接，确认可用后重新发送这条消息。";
 
 /** A fresh deployment has no model key yet — the first thing a new owner hits, and "try again"
  *  cannot fix it. /网页 and /加机器 are deterministic (they mint credentials without a model),

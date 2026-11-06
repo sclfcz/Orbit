@@ -1,4 +1,4 @@
-# Sig Product Requirements Document (Spec)
+# Orbit Product Requirements Document (Spec)
 
 > Status: draft v0.2.
 >
@@ -18,7 +18,7 @@
 
 ## 1. Overview
 
-Sig is a personal agent "steward" deployed on a Cloudflare Durable Object, online 24/7.
+Orbit is a personal agent "steward" deployed on a Cloudflare Durable Object, online 24/7.
 
 It does not write code itself. Its job is:
 
@@ -31,7 +31,7 @@ The product is built on [pi-durable](https://github.com/earendil-works/pi) (`@ea
 
 ## 2. Target Users and Use Cases
 
-**Target users**: developers already using coding agents such as Claude Code, Codex, and pi, who use Sig mainly on their phones.
+**Target users**: developers already using coding agents such as Claude Code, Codex, and pi, who use Orbit mainly on their phones.
 
 Core insight: at the computer, the user can operate a specific agent directly; away from the computer, the user wants to say one sentence to the steward, have the matter handled and get a report back when it is done, without going back and forth with an agent over every detail.
 
@@ -54,7 +54,7 @@ Typical scenarios:
 5. **Proactive behavior must have a source.** Every proactive action by the steward can be traced back to something the user said.
 6. **Memory is visible and controllable by the user.** What gets remembered and what gets forgotten — the user can see and intervene in both.
 
-Differentiation: products like Grok Bot and Dots put their capabilities in the cloud; Sig's capabilities live **on the user's own machines**, with access to real code, files, logged-in state, and the local environment.
+Differentiation: products like Grok Bot and Dots put their capabilities in the cloud; Orbit's capabilities live **on the user's own machines**, with access to real code, files, logged-in state, and the local environment.
 
 ## 4. Core Concepts
 
@@ -321,7 +321,7 @@ The steward should be dormant, costing nothing, most of the time. The documentat
 - Single-tenant deployment (each deployment serves one user).
 - Feishu channel (QR-code bot creation, cards, push).
 - Machine pairing and the connector, supporting at least one agent. The onboarding order is **pi → Claude Code → Codex** (Codex to be confirmed on this machine before it is finalized). For the pi integration see the [research](research/pi-integration.md) and the [design](design/connector-pi.md).
-- The driven agent must already be installed and logged in on that machine; Sig never touches the agent's account credentials.
+- The driven agent must already be installed and logged in on that machine; Orbit never touches the agent's account credentials.
 - The steward manages only the sessions it started itself; sessions the user starts manually are not monitored, but external changes are detected before one is spun up again.
 - Thread / session memory and routing, relay-style handoff briefs.
 - Three-part reports, the "waiting on you" state, and unread flags.
@@ -363,7 +363,7 @@ The following are assumptions formed during discussion, not yet verified. They a
 - The actual capability and permission scope of Feishu's "scan QR code to create a bot", and whether a personal account can create one.
 - Whether each coding agent can run independently of the connector, to reduce the chance of "lost contact" turning into an "interrupt".
 - The resume and external-drive capabilities of Claude Code, Codex, and pi.
-- Name collisions for the project name Sig on npm, GitHub, and domains have not been checked yet.
+- Name collisions for the project name Orbit on npm, GitHub, and domains have not been checked yet.
 
 ## 17. References
 

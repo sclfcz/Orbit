@@ -22,7 +22,7 @@ Non-goals (MVP): multi-tenancy; end-to-end encryption (between connector and bro
 ```
  Feishu / web ─────────────┐
                            ▼
-Connector A ──wss──▶  Worker (entry, pre-check)──▶  Sig DO (singleton "owner")
+Connector A ──wss──▶  Worker (entry, pre-check)──▶  Orbit DO (singleton "owner")
 Connector B ──wss──▶                                     ├─ connection management (tags: connector / web)
                                                          ├─ outbox: commands pending delivery
                                                          ├─ event_inbox: received events
@@ -333,7 +333,7 @@ Values for `code`: `bad_request`, `unauthorized`, `forbidden`, `not_found`, `con
 
 ### 6.8 Direct worker commands (web → DO → connector, no steward step)
 
-[ADR-0011](../adr/0011-direct-worker-chat-from-session-view.md): a browser that already has a worker session's view open can act on it directly, without routing through Sig's conversation. v1 scope is `send` and `interrupt` — the two kinds that already have a deterministic, LLM-free dispatch path (`Dispatcher.sendToWorker`/`interruptWorker`). `resume` and `stop_process` are not reachable this way yet; see ADR-0011 decision 1.
+[ADR-0011](../adr/0011-direct-worker-chat-from-session-view.md): a browser that already has a worker session's view open can act on it directly, without routing through Orbit's conversation. v1 scope is `send` and `interrupt` — the two kinds that already have a deterministic, LLM-free dispatch path (`Dispatcher.sendToWorker`/`interruptWorker`). `resume` and `stop_process` are not reachable this way yet; see ADR-0011 decision 1.
 
 **`subscribe`** (web → DO): declares which worker's session view is open. Required before `worker_cmd`; tracked on the connection itself (lost on disconnect or hibernation, never inferred from any other state).
 
@@ -357,7 +357,7 @@ Values for `code`: `bad_request`, `unauthorized`, `forbidden`, `not_found`, `con
 - **Subscription-gated, not client-asserted.** The DO accepts `worker_cmd` only when the connection's own `subscribe` state names that exact `workerId`. No subscription, a mismatched one, or one since dropped (tab closed, unsubscribed, DO restarted and not yet re-subscribed): `error{code:"forbidden"}`. This is what makes "the UI already picked the target" an enforced property rather than a convention.
 - **Dispatch**: the DO calls `Dispatcher.sendToWorker`/`interruptWorker` with `provenance: "web_direct"` and `cmdId: id` — the same methods and the same `outbox` write (§4.2) a steward tool call would produce, so the resulting `cmd` the connector receives is indistinguishable from a steward-issued one.
 - **Idempotency**: `id` is the caller's `sh_web_request` (ADR-0004 decision 3), reused directly as `cmdId`; a retry under the same id is one effect, matching every other owner-web mutation. This is the one path where `cmdId` does not originate from a steward tool-call id (§7.1).
-- **Recording, not waking**: `sendToWorker`/`interruptWorker` already add a Thread timeline entry as part of normal dispatch; the `web_direct` provenance is what lets Sig tell, next time it reasons about that Thread, that this one did not come from its own tool call. Sig is not woken synchronously. Sig learns the outcome the ordinary way — the worker's resulting `progress`/`report`/`settled` events flow back through §4.3 and wake Sig under the existing rules, regardless of who issued the command.
+- **Recording, not waking**: `sendToWorker`/`interruptWorker` already add a Thread timeline entry as part of normal dispatch; the `web_direct` provenance is what lets Orbit tell, next time it reasons about that Thread, that this one did not come from its own tool call. Orbit is not woken synchronously. Orbit learns the outcome the ordinary way — the worker's resulting `progress`/`report`/`settled` events flow back through §4.3 and wake Orbit under the existing rules, regardless of who issued the command.
 - A `refused` outcome from the `Dispatcher` (unknown/broken worker, empty text) never reaches `outbox`, so the DO answers with `error` directly instead of waiting for a `cmd_ack` that will never come.
 - Otherwise, `cmd_ack`/`cmd_result` follow §6.3 exactly and are relayed verbatim to the subscribed browser connection once the connector answers — the DO does not fabricate an optimistic ack.
 

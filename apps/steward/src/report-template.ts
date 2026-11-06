@@ -235,7 +235,7 @@ export function prCommandArgs(input: { report: ReportRow | null; threadTitle: st
     const leftovers = report.leftovers ?? [];
     if (leftovers.length > 0) lines.push("", "遗留：", ...leftovers.slice(0, 10).map((l) => `- ${l}`));
   }
-  lines.push("", `由 Sig 派发的 worker 在分支 ${input.branch} 上完成。`);
+  lines.push("", `由 Orbit 派发的 worker 在分支 ${input.branch} 上完成。`);
   return { title, body: lines.join("\n") };
 }
 

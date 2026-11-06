@@ -1,7 +1,7 @@
 {
   "name": "@alexlikevibe/sig",
   "version": "0.1.3",
-  "description": "Sig connector: pairs this machine with your steward and runs pi workers as a background service.",
+  "description": "Orbit connector: pairs this machine with your Orbit workspace and runs local coding agents as a background service.",
   "type": "module",
   "bin": {
     "sig": "bin/sig.js"
@@ -14,12 +14,9 @@
   "engines": {
     "node": ">=22.18.0"
   },
-  "publishConfig": {
-    "access": "public"
-  },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/iefnaf/sig.git",
+    "url": "git+https://github.com/sclfcz/Orbit.git",
     "directory": "apps/connector"
   },
   "license": "MIT",
@@ -43,5 +40,6 @@
     "http-proxy-agent": "^9.1.0",
     "https-proxy-agent": "^9.1.0",
     "undici": "^8.12.3"
-  }
+  },
+  "private": true
 }

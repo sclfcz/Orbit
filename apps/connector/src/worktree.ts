@@ -76,7 +76,7 @@ async function branchExists(repoPath: string, branch: string): Promise<boolean> 
   }
 }
 
-/** Canonicalizes a user-selected path into the identity Sig uses as `repoId`, plus whatever
+/** Canonicalizes a user-selected path into the identity Orbit uses as `repoId`, plus whatever
  *  Git capability is detected there. Git-backed: identity = git top-level (byte-identical to
  *  what `repoTopLevel` alone returned before this change — every existing repo's `repoId` is
  *  unaffected). Not Git-backed: identity = realpath(path) — a plain workspace has no repo

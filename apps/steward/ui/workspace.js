@@ -1,4 +1,4 @@
-// The Sig web workspace: one continuous conversation, the threads behind it, and the decisions
+// The Orbit web workspace: one continuous conversation, the threads behind it, and the decisions
 // waiting for the owner. This file is the view and the wiring; what to show is decided by the
 // pure helpers in model.js and format.js. Data comes from /app/api/workspace and is kept
 // current by a WebSocket that only says "something changed" (the page then refetches).
@@ -32,7 +32,7 @@ const state = {
   connection: 'connecting',
   fatal: null, // 'signed_out' | 'logged_out' | 'unreachable'
   knownAttention: new Set(),
-  live: null, // the reply Sig is writing right now: { text, threadId, ending }
+  live: null, // the reply Orbit is writing right now: { text, threadId, ending }
   skew: 0, // server clock minus this browser's clock, so relative times agree with the server's timestamps
   session: null, // within the selected thread: the worker whose recorded session fills the main pane
   viewer: null, // { workerId, handle } while that pane is mounted
@@ -225,7 +225,7 @@ function userMessage(message) {
 
 function assistantMessage(message) {
   return h('article', { class: 'message', id: message.id },
-    h('div', { class: 'message-header' }, h('img', { class: 'agent-avatar', src: '/brand/sig.svg', width: 26, height: 26, alt: '' }), 'Sig', h('span', { class: 'message-time' }, formatClock(message.at))),
+    h('div', { class: 'message-header' }, h('img', { class: 'agent-avatar', src: '/brand/orbit.png', width: 26, height: 26, alt: '' }), 'Orbit', h('span', { class: 'message-time' }, formatClock(message.at))),
     h('div', { class: 'message-body' },
       state.selected ? null : threadReference(message.threadId),
       message.card ? cardNode(message.card, message.id, message.open === true) : markup(message.text ?? '')));
@@ -234,7 +234,7 @@ function assistantMessage(message) {
 /** The reply being written, shown as it arrives; the finished message replaces it. */
 function liveMessage(live) {
   return h('article', { class: 'message live', id: 'live-reply' },
-    h('div', { class: 'message-header' }, h('img', { class: 'agent-avatar', src: '/brand/sig.svg', width: 26, height: 26, alt: '' }), 'Sig'),
+    h('div', { class: 'message-header' }, h('img', { class: 'agent-avatar', src: '/brand/orbit.png', width: 26, height: 26, alt: '' }), 'Orbit'),
     h('div', { class: 'message-body' }, markup(trimOpenMarkup(live.text)), h('span', { class: 'working-dots' }, h('i'), h('i'), h('i'))));
 }
 
@@ -986,7 +986,7 @@ function renderOnboarding() {
       const security = state.onboarding?.step === 'security';
       page.replaceChildren(
         h('header', { class: 'onboarding-header' },
-          h('div', { class: 'brand' }, h('img', { class: 'brand-mark', src: '/brand/sig.svg', width: 32, height: 32, alt: '' }), h('span', { class: 'brand-word' }, 'Sig')),
+          h('div', { class: 'brand' }, h('img', { class: 'brand-mark', src: '/brand/orbit.png', width: 32, height: 32, alt: '' }), h('span', { class: 'brand-word' }, 'Orbit')),
           h('div', { class: 'language-switch' }, ['en', 'zh'].map((locale) => h('button', { type: 'button', dataset: { locale }, 'aria-pressed': String(getLocale() === locale) }, locale === 'en' ? 'EN' : '中文')))),
         h('div', { class: 'onboarding-content' },
           !state.setupChecked ? [h('h1', null, t(state.settingsError ? 'settingsLoadFailed' : 'settingsLoading')),
@@ -1122,7 +1122,7 @@ function renderFatal() {
   }
   const [title, body] = FATAL_COPY[state.fatal];
   const next = h('div', { class: 'fatal', id: 'fatal', role: 'alertdialog', 'aria-labelledby': 'fatal-title' },
-    h('div', { class: 'fatal-box' }, h('img', { src: '/brand/sig.svg', alt: '' }), h('h2', { id: 'fatal-title' }, t(title)), h('p', null, t(body))));
+    h('div', { class: 'fatal-box' }, h('img', { src: '/brand/orbit.png', alt: '' }), h('h2', { id: 'fatal-title' }, t(title)), h('p', null, t(body))));
   if (current) current.replaceWith(next);
   else document.body.append(next);
 }
@@ -1614,8 +1614,8 @@ async function addPasskey() {
       credential = await navigator.credentials.create({
         publicKey: {
           challenge: b64urlToBuffer(data.challenge),
-          rp: { id: data.rpId, name: 'Sig' },
-          user: { id: b64urlToBuffer(data.userId), name: 'owner', displayName: 'Sig' },
+          rp: { id: data.rpId, name: 'Orbit' },
+          user: { id: b64urlToBuffer(data.userId), name: 'owner', displayName: 'Orbit' },
           pubKeyCredParams: [{ alg: -7, type: 'public-key' }, { alg: -257, type: 'public-key' }],
           authenticatorSelection: { residentKey: 'required', userVerification: 'preferred' },
           excludeCredentials: data.excludeCredentials.map((entry) => ({ id: b64urlToBuffer(entry.id), type: 'public-key', transports: entry.transports })),

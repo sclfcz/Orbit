@@ -1,4 +1,4 @@
-# Using Sig
+# Using Orbit
 
 [English README](../README.md) · [中文 README](../README.zh-CN.md)
 
@@ -12,23 +12,23 @@ There is no chat channel for now ([ADR-0003](adr/0003-owner-api-replaces-chat-ch
 KEY="Authorization: Bearer $SERVER_KEY"
 
 # Say something (the reply lands in the message list below):
-curl -X POST https://sig.example.com/api/messages -H "$KEY" -H 'content-type: application/json' \
+curl -X POST https://orbit.example.com/api/messages -H "$KEY" -H 'content-type: application/json' \
   -d '{"text": "把 repo-a 里的登录 bug 修了"}'
 
 # Read what came back — replies, done reports, questions, digests (poll with ?after=<cursor>):
-curl "https://sig.example.com/api/messages?limit=20" -H "$KEY"
+curl "https://orbit.example.com/api/messages?limit=20" -H "$KEY"
 
 # Quote a message to continue that Thread / answer its question:
-curl -X POST https://sig.example.com/api/messages -H "$KEY" -H 'content-type: application/json' \
+curl -X POST https://orbit.example.com/api/messages -H "$KEY" -H 'content-type: application/json' \
   -d '{"text": "改用 pnpm", "replyTo": "<message id from the list>"}'
 
 # Press a button a message carries (ask options, PR consent [同意/先不要], offline asks):
-curl -X POST https://sig.example.com/api/actions -H "$KEY" -H 'content-type: application/json' \
+curl -X POST https://orbit.example.com/api/actions -H "$KEY" -H 'content-type: application/json' \
   -d '{"cardMsgId": "<message id>", "action": "pr_approve"}'
 
 # Add a machine / open the web workspace:
-curl -X POST https://sig.example.com/api/pairing     -H "$KEY"   # → run this on the new machine
-curl -X POST https://sig.example.com/api/login-link  -H "$KEY"   # → one-time web login URL
+curl -X POST https://orbit.example.com/api/pairing     -H "$KEY"   # → run this on the new machine
+curl -X POST https://orbit.example.com/api/login-link  -H "$KEY"   # → one-time web login URL
 ```
 
 Follow-up work continues relay-style (spec §5.3): the same agent on the same machine **resumes the previous session**, while a machine/agent switch, a bloated context (≥ 80%), or your explicit ask for a fresh perspective starts a **new session on the previous worker's branch**, prefixed with a deterministic handoff brief. You can also reach a worker mid-run — 「改用 pnpm」 goes out as a steer, 「停下那个」 aborts, and stopping only ever follows your explicit instruction.
@@ -37,7 +37,7 @@ Two exact phrases stay deterministic and never reach the model — they mint cre
 
 ## Local coding agents
 
-**pi** is the default worker agent. When the `claude` CLI (Claude Code) is on the machine, the connector picks it up automatically and advertises it in `hello.agents` — ask the steward 「用 Claude Code 跑这个」 and it dispatches to a Claude Code worker: headless `claude -p` with stream-json output, a Sig `report` MCP tool, and the same outcome adjudication and branch relay as pi. The differences are declared honestly and degrade instead of pretending: Claude Code cannot be steered mid-run and cannot run read-only tasks, so those stay on pi.
+**pi** is the default worker agent. When the `claude` CLI (Claude Code) is on the machine, the connector picks it up automatically and advertises it in `hello.agents` — ask the steward 「用 Claude Code 跑这个」 and it dispatches to a Claude Code worker: headless `claude -p` with stream-json output, a Orbit `report` MCP tool, and the same outcome adjudication and branch relay as pi. The differences are declared honestly and degrade instead of pretending: Claude Code cannot be steered mid-run and cannot run read-only tasks, so those stay on pi.
 
 ## The web workspace
 

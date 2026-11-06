@@ -61,7 +61,7 @@ export function binEntryPath(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "..", "bin", "sig.js");
 }
 
-const USAGE = `sig ${VERSION} — the Sig connector
+const USAGE = `sig ${VERSION} — the Orbit connector
 
 usage:
   sig connect <url> <code> [--proxy <url>] [--foreground]

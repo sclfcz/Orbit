@@ -1,6 +1,6 @@
 // Direct worker commands from an open session view (issue #84, ADR-0011,
 // docs/design/connector-do-protocol.md §6.8): a browser that already has a worker's session
-// view open may send/interrupt that worker directly, without routing through Sig's
+// view open may send/interrupt that worker directly, without routing through Orbit's
 // conversation. v1 scope is deliberately the mechanical subset of §6.2 that already has a
 // deterministic, LLM-free dispatch path — `resume`/`stop_process` are not included.
 import { z } from "zod";

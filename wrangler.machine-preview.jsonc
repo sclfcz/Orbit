@@ -1,5 +1,5 @@
 {
-  "name": "sig-preview-machine",
+  "name": "orbit-preview-machine",
   "main": "apps/preview-machine/src/index.ts",
   "workers_dev": true,
   "compatibility_date": "2026-10-10",

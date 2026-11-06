@@ -1,4 +1,4 @@
-// Sig's injected pi extension, docs/design/connector-pi.md §7.1 and ADR-0001.
+// Orbit's injected pi extension, docs/design/connector-pi.md §7.1 and ADR-0001.
 //
 // The connector writes this file into ~/.sig/ext/ with each version and loads it via
 // `--extension`; it never references in-repo files, so project content cannot swap it out.
@@ -34,7 +34,7 @@ function appendCommandEntry(pi: ExtensionAPI, commandId: string): void {
 }
 
 const REMINDER_TEXT =
-  "[Sig] You finished without calling the `report` tool. Call `report` now as your " +
+  "[Orbit] You finished without calling the `report` tool. Call `report` now as your " +
   "final action: status (done | blocked | needs_decision), summary, changes " +
   "(or `answer` when nothing was modified), decisions, " +
   "leftovers, and — when blocked or needs_decision — the question for the user in `question`. " +
@@ -87,7 +87,7 @@ export default function sigExtension(pi: ExtensionAPI): void {
     name: "report",
     label: "Report",
     description:
-      "Report the outcome of this task to the user via Sig. This must be your LAST " +
+      "Report the outcome of this task to the user via Orbit. This must be your LAST " +
       "action when the task is finished, blocked, or needs a user decision. Put questions " +
       "for the user in `question` (with status needs_decision); do not ask in plain text.",
     parameters: reportParameters,
@@ -104,7 +104,7 @@ export default function sigExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand(COMMAND_NAME, {
-    description: "Internal: deliver a Sig-dispatched prompt with its command marker.",
+    description: "Internal: deliver a Orbit-dispatched prompt with its command marker.",
     handler: async (args: string) => {
       const newline = args.indexOf("\n");
       const commandId = newline === -1 ? null : args.slice(0, newline).trim();

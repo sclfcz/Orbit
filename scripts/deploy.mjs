@@ -13,20 +13,20 @@ if (nameFlag !== -1) {
     args.splice(nameFlag, 1);
   }
   if (!overrideName) {
-    console.error("sig: --name needs a value");
+    console.error("orbit: --name needs a value");
     process.exit(1);
   }
 }
 const dryRun = args.includes("--dry-run");
 execFileSync("npx", ["-y", "wrangler", "deploy", ...(overrideName ? ["--name", overrideName] : []), ...args], { stdio: "inherit" });
 if (dryRun) {
-  console.log("\nsig: dry run — next-step hints skipped.");
+  console.log("\norbit: dry run — next-step hints skipped.");
   process.exit(0);
 }
 
 const name = overrideName ?? JSON.parse(readFileSync("wrangler.jsonc", "utf8").replace(/\/\/[^\n]*/g, "")).name;
 console.log(`
-Sig is deployed as "${name}" at the URL wrangler printed above.
+Orbit is deployed as "${name}" at the URL wrangler printed above.
 
 1. Open that URL and sign in with the password from the deployment form.
    If you deployed from a terminal, set a password interactively:

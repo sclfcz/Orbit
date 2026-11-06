@@ -71,11 +71,11 @@ describe("no_proxy matching", () => {
     expect(shouldProxy("wss://sig.example.workers.dev/agents/steward/owner", config)).toBe(true);
     // A bare host matches itself, not its subdomains (curl semantics).
     expect(shouldProxy("https://example.com/x", { ...config, noProxy: "example.com" })).toBe(false);
-    expect(shouldProxy("https://sig.example.com/x", { ...config, noProxy: "example.com" })).toBe(true);
+    expect(shouldProxy("https://orbit.example.com/x", { ...config, noProxy: "example.com" })).toBe(true);
   });
 
   it("suffix-matches subdomains with a leading dot or wildcard, not look-alikes", () => {
-    expect(shouldProxy("https://sig.example.com/x", { ...config, noProxy: ".example.com" })).toBe(false);
+    expect(shouldProxy("https://orbit.example.com/x", { ...config, noProxy: ".example.com" })).toBe(false);
     expect(shouldProxy("https://example.com/x", { ...config, noProxy: ".example.com" })).toBe(false);
     expect(shouldProxy("https://notexample.com/x", { ...config, noProxy: ".example.com" })).toBe(true);
     expect(shouldProxy("https://a.b.example.com/x", { ...config, noProxy: "*.example.com" })).toBe(false);
