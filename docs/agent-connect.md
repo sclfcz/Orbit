@@ -38,7 +38,7 @@ npm install --global "$orbit_package_dir"/sclfcz-orbit-*.tgz
 orbit --version
 ```
 
-The built tarball contains the CLI and its assets, so the installed service does not depend on the checkout or an npx cache. If installing an update over a running connector, run `orbit restart` afterwards. Until the npm package is published, update by repeating this source-install procedure instead of `orbit upgrade`. For network or registry errors other than a missing package, diagnose the error rather than treating it as proof the package is unpublished.
+The built tarball contains the CLI and its assets, so the installed service does not depend on the checkout or an npx cache. If installing an update over a running connector, run `orbit restart` afterwards. After a source install, use `orbit upgrade` to move to the published npm package; repeat the source procedure only when you need to install unpublished code. For network or registry errors other than a missing package, diagnose the error rather than treating it as proof the package is unpublished.
 
 ## 2 · Pair with the personal agent
 

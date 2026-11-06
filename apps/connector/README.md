@@ -8,7 +8,7 @@
 
 `@sclfcz/orbit` installs the `orbit` command. Orbit is a self-hosted personal agent that runs in your Cloudflare account; the connector runs on a macOS or Linux computer and connects that computer to Orbit. It keeps a WebSocket connection to your deployment, starts local coding agents such as pi and Claude Code, and reports their progress back to your personal agent.
 
-The connector package is named `@sclfcz/orbit` and installs the `orbit` command. Its first npm release is not published yet; use the source-install steps in the Orbit connector runbook until it is available. Existing paired machines keep their local state under `~/.sig`. The connector makes only an outbound connection. You do not need to open an inbound port on your computer.
+The connector package is named `@sclfcz/orbit` and installs the `orbit` command. It is published on npm; install it with `npm install --global @sclfcz/orbit`, or use the source-install steps in the Orbit connector runbook. Existing paired machines keep their local state under `~/.sig`. The connector makes only an outbound connection. You do not need to open an inbound port on your computer.
 
 ## Requirements
 
@@ -91,7 +91,7 @@ The deployment and connector runbooks live in the [Orbit repository](https://git
 
 `@sclfcz/orbit` 会安装 `orbit` 命令。Orbit 是部署在你 Cloudflare 账号里的 personal agent；connector 运行在 macOS 或 Linux 电脑上，把这台电脑接入 Orbit。它保持到你部署地址的 WebSocket 连接，启动本地的 pi、Claude Code 等 coding agent，并把进展回传给 personal agent。
 
-连接器包名为 `@sclfcz/orbit`，安装后命令为 `orbit`。首次 npm 发布完成前，请按 Orbit 连接器指南从源码安装；已配对机器仍使用 `~/.sig` 中的状态。Connector 只主动发起出站连接，不需要在电脑上开放入站端口。
+连接器包名为 `@sclfcz/orbit`，安装后命令为 `orbit`。Orbit 连接器已发布到 npm，可运行 `npm install --global @sclfcz/orbit` 安装，也可以按连接器指南从源码安装；已配对机器仍使用 `~/.sig` 中的状态。Connector 只主动发起出站连接，不需要在电脑上开放入站端口。
 
 ## 环境要求
 
