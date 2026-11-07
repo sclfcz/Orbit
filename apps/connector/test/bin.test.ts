@@ -204,7 +204,8 @@ describe("bin/orbit.js (skipped when dist has not been built)", () => {
 
     expect(res.stdout).toMatch(/codex \(this shell\):\s+codex-cli 0\.166\.0-alpha\.6/);
     expect(res.stdout).toMatch(/codex \(service PATH\):\s+not found/);
-    expect(res.stdout).toContain("run `orbit upgrade` from this shell");
+    expect(res.stdout).toContain(`run \`orbit upgrade --version ${VERSION}\` from this shell`);
+    expect(res.stdout).toContain("for a source install, repeat the source install steps");
     expect(res.stdout).toContain("`orbit restart` keeps the recorded PATH");
   });
 

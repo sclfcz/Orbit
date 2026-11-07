@@ -398,7 +398,7 @@ async function doctorCommand(): Promise<void> {
     serviceCodex.diagnostic?.startsWith("Codex CLI not found")
   ) {
     console.log(
-      "codex works in this shell but not on the installed service PATH — if it was installed after the service, run `orbit upgrade` from this shell; `orbit restart` keeps the recorded PATH",
+      `codex works in this shell but not on the installed service PATH — if it was installed after the service, run \`orbit upgrade --version ${VERSION}\` from this shell (for a source install, repeat the source install steps); \`orbit restart\` keeps the recorded PATH`,
     );
   }
 
