@@ -10,6 +10,7 @@ import { childEnv } from "../src/pi-adapter.ts";
 import { codexSessionPath, inspectCodexTail } from "../src/codex-session.ts";
 import { readFullSessionHistory } from "../src/full-session-history.ts";
 import { git, makeGitRepo, tmpDir, waitFor } from "./helpers.ts";
+import { findCorrelatedShellEvidence } from "./codex-live-helpers.ts";
 
 describe.skipIf(process.env.ORBIT_CODEX_LIVE !== "1")("real Codex acceptance", () => {
   it("handshakes and reads configuration without calling a model", async () => {
@@ -131,16 +132,7 @@ describe.skipIf(process.env.ORBIT_CODEX_LIVE !== "1")("real Codex acceptance", (
       await a.stopProcess("live-clean-readonly");
       const file = codexSessionPath(handle.sessionId, handle.sessionFile, home);
       expect(file).toBeTruthy();
-      const records = readFileSync(file!, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
-      const call = records.find((record) => record.type === "response_item" &&
-        ["function_call", "custom_tool_call"].includes(record.payload?.type) &&
-        String(record.payload.input ?? record.payload.arguments ?? "").includes(command))?.payload;
-      expect(call, "The model must actually invoke the requested shell command").toBeTruthy();
-      const result = records.find((record) => record.type === "response_item" &&
-        ["function_call_output", "custom_tool_call_output"].includes(record.payload?.type) &&
-        record.payload.call_id === call.call_id)?.payload;
-      expect(result, "The denial must come from the matching native tool result").toBeTruthy();
-      const toolOutput = typeof result.output === "string" ? result.output : result.output.map((part: any) => part.text ?? "").join("\n");
+      const { toolOutput } = findCorrelatedShellEvidence(file!, command);
       expect(toolOutput).toContain(marker);
       expect(toolOutput).toMatch(/operation not permitted|permission denied|read-only file system/i);
       expect(toolOutput).toMatch(/"exit_code"\s*:\s*[1-9]\d*|exited with code\s+[1-9]\d*/i);
