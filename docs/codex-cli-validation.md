@@ -1,6 +1,6 @@
 # Codex CLI implementation validation — 2026-11-07
 
-Overall: **package regressions, local browser workflow and cold continuation pass; readonly model acceptance remains conditional**. Real-CLI evidence covers worktree writes, structured reports, steer, interruption with shell cleanup, local history, Connector restart, and uncertain-crash no-replay recovery. Manager-level cold continuation succeeds while an unrelated real app-server remains alive; same-thread competing writers are refused before input. A clean readonly model turn remains unverified.
+Overall: **package regressions, local browser workflow, cold continuation and a clean readonly model turn pass locally**. Real-CLI evidence covers worktree writes, structured reports, steer, interruption with shell cleanup, local history, Connector restart, and uncertain-crash no-replay recovery. Manager-level cold continuation succeeds while an unrelated real app-server remains alive; same-thread competing writers are refused before input. Readonly model acceptance uses a separately authenticated clean Codex home; inherited external integrations remain rejected.
 
 This public record contains aggregate results and reproducible test names. Raw session records, machine identifiers, local paths, credentials and detailed process evidence remain local. The owner authorized committing and pushing verified source to a feature branch; deployment and merging main are outside this task.
 
@@ -19,6 +19,8 @@ This public record contains aggregate results and reproducible test names. Raw s
 | Rebuilt browser continuation of the interrupted session | Passed; same native thread, new structured report, history updated |
 | Focused cold-continuation and delivery regressions | **67 passed**, 6.36 s; Connector typecheck passed |
 | Independent npm CLI `0.167.0`: both real acceptance files, sequential | **6 passed**, 193.93 s; includes safe readonly refusal, not a clean readonly model run |
+| Clean-home readonly model acceptance, npm CLI `0.167.0` | **1 passed**, 5 deselected; 40.59 s; actual read, correlated write denial and structured report |
+| Adapter regressions and default live-test gating after readonly addition | **27 passed, 6 skipped**, 6.12 s; Connector typecheck passed |
 | `pnpm typecheck` | All workspace packages passed after the cold-continuation fix |
 | `git diff --check` | Passed |
 
@@ -40,7 +42,7 @@ Result: **2 files, 6 tests passed in 193.93 seconds**. Probe and task evidence r
 
 The Connector subprocess test successfully cold-continued while an unrelated real app-server stayed alive. History reconstruction matched the original local record across **31 pages, 60 fragments and 35 split fragments**. Uncertain-crash recovery preserved receipts, rejected duplicate/retry commands and observed exactly one start-marker execution. No runtime changes were required for the stable CLI.
 
-Independent installation does not imply isolated configuration: this CLI still uses the existing Codex home, including inherited external integrations. The readonly preflight again returned `unsupported_capability` before model input, recorded as `refused_unverifiable_external_tools`. That expected refusal is one of the six passing checks; it is not proof of a clean readonly model turn. Clean readonly model acceptance remains a separate gate. The browser acceptance below used the earlier desktop-bundled version and was not repeated for this installation.
+Independent installation does not imply isolated configuration: this CLI still uses the existing Codex home, including inherited external integrations. The readonly preflight again returned `unsupported_capability` before model input, recorded as `refused_unverifiable_external_tools`. That expected refusal is one of the six passing checks; it is not proof of a clean readonly model turn. The subsequent clean-home model check is recorded separately under Readonly boundary. The browser acceptance below used the earlier desktop-bundled version and was not repeated for this installation.
 
 ## Local browser acceptance
 
@@ -87,7 +89,13 @@ The real app-server executed the same shell write under two explicit policies:
 - `readOnly`, network disabled: exit code 1, `Operation not permitted`, no output file.
 - `workspaceWrite`, restricted to the temporary repository, network and implicit temporary roots disabled: exit code 0 and exact expected bytes.
 
-This proves native local command sandbox enforcement through standalone `command/exec`. It does not prove a readonly model turn or confinement of external integrations. This machine inherits desktop MCP/plugin configuration, which empty-table overrides did not remove. Readonly preflight correctly refused before task delivery. The live test records that refusal separately and never treats a missing output file alone as sandbox proof.
+This standalone `command/exec` check proves native local command sandbox enforcement; it was not counted as a readonly model turn. This machine's default home inherits desktop MCP/plugin configuration, which empty-table overrides did not remove. Readonly preflight correctly refused before task delivery.
+
+A separate clean-home model acceptance subsequently passed with independent `codex-cli 0.167.0`: **1 test passed in 40.59 seconds**, with five other live cases deselected. A new private `CODEX_HOME` used native ChatGPT login and a local configuration disabling apps, plugins, hooks, browser/computer use, multi-agent and web search. No authentication file was copied or linked; no existing global configuration was edited. Effective `config/read` returned empty MCP/plugin tables and null apps/hooks/browser/computer entries. The normal home still reported its existing ChatGPT login afterward.
+
+The test created a random marker in an input file, without revealing it in the model prompt. Through the production CodexAdapter in readonly mode, the model invoked the requested shell command to read that file and attempt a write. Its exact native call ID was correlated with the corresponding tool result: the output contained the random marker, an OS permission-denial message and a nonzero exit code. The input bytes remained unchanged, the output file was absent, and the model returned the required structured `done` report containing the marker. Refusal before model execution, a model-authored claim of denial, or file absence alone cannot pass this test. No runtime or preflight protection was changed.
+
+The new case requires both `ORBIT_CODEX_LIVE=1` and `ORBIT_CODEX_READONLY_HOME` pointing at the separately authenticated clean home. It is skipped by default. The existing inherited-config refusal case remains separate. See [Codex support](codex-cli.md#clean-readonly-acceptance) for the reproducible setup. This acceptance covers the clean local configuration on the tested platform, not arbitrary external integrations or the browser/manager path in that home.
 
 ## Fault regressions and acceptance repairs
 
@@ -104,7 +112,7 @@ The original implementation snapshot had 426 Connector passes, 11 stale-bin fail
 ## Remaining boundaries
 
 - `0.166.0-alpha.6` from the desktop bundle and independently installed `0.167.0` were live-tested. Discovery accepts the narrow 0.166/0.167 family; other accepted releases and platforms are not thereby certified.
-- A clean Codex configuration is still needed to certify readonly model execution; installing an independent binary does not isolate inherited configuration.
+- Readonly model execution passed in a separately authenticated clean home. The default home still contains external integrations and remains safely refused for readonly work; installing an independent binary does not isolate inherited configuration.
 - Cold continuation and same-thread exclusion were verified with separate real app-servers using the existing home. This does not certify every desktop storage mode; native exclusion requires compatible local-store writers sharing `CODEX_HOME`.
 - Images remain unsupported, and monetary cost is not inferred from token usage.
 - No deployed cloud environment was tested.

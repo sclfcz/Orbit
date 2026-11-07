@@ -1,6 +1,7 @@
 // Opt-in only: creates new Orbit-owned threads in a dedicated temporary Git repository.
 // Never joins a desktop session, rewrites global config, copies auth, pushes or deploys.
 import { describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CodexAdapter, detectCodex } from "../src/codex-adapter.ts";
@@ -107,6 +108,49 @@ describe.skipIf(process.env.ORBIT_CODEX_LIVE !== "1")("real Codex acceptance", (
       writeFileSync("/tmp/orbit-codex-live-readonly.json", JSON.stringify({ readonly: "reported_without_artifact", realReadonlyEnforcement: "not_verified" }));
     } finally { await a.stopProcess("live-readonly"); }
   }, 90000);
+
+  it.skipIf(!process.env.ORBIT_CODEX_READONLY_HOME)("reads through a clean readonly model turn and proves its attempted write was denied", async () => {
+    const home = process.env.ORBIT_CODEX_READONLY_HOME!;
+    const dir = tmpDir("orbit-codex-live-clean-readonly"); const repo = await makeGitRepo(dir);
+    const marker = `orbit-readonly-${randomUUID()}`;
+    const input = join(repo, "readonly-input.txt"); const output = join(repo, "readonly-probe.txt");
+    writeFileSync(input, `${marker}\n`);
+    const command = "cat readonly-input.txt; printf orbit-readonly-must-be-denied > readonly-probe.txt";
+    const a = new CodexAdapter({ env: { CODEX_HOME: home }, requestTimeoutMs: 20000 });
+    const events: any[] = []; a.on("worker-event", (e) => events.push(e));
+    try {
+      // Unlike the inherited-config check, refusal here fails the test: a real
+      // model turn and correlated native tool output are required for acceptance.
+      const handle = await a.start({ workerId: "live-clean-readonly", threadId: "test", cwd: repo, mode: "readonly", commandId: "clean-readonly",
+        prompt: `Validate this readonly sandbox using the local shell. Execute exactly this command once:\n\n${command}\n\nRead the actual output; do not guess the input file contents. Do not use external integrations, alter the command, attempt alternate writes, commit or push. A denied write is the expected result. Finish with the required JSON report, status done, including the input file's exact contents and the write denial/exit code in answer.` });
+      const settled = await waitFor(() => events.find((e) => e.type === "settled"), 90000, "clean readonly model report");
+      expect(settled).toMatchObject({ outcome: "reported", report: { status: "done" } });
+      expect(settled.report.answer).toContain(marker);
+      expect(readFileSync(input, "utf8")).toBe(`${marker}\n`);
+      expect(existsSync(output)).toBe(false);
+      await a.stopProcess("live-clean-readonly");
+      const file = codexSessionPath(handle.sessionId, handle.sessionFile, home);
+      expect(file).toBeTruthy();
+      const records = readFileSync(file!, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+      const call = records.find((record) => record.type === "response_item" &&
+        ["function_call", "custom_tool_call"].includes(record.payload?.type) &&
+        String(record.payload.input ?? record.payload.arguments ?? "").includes(command))?.payload;
+      expect(call, "The model must actually invoke the requested shell command").toBeTruthy();
+      const result = records.find((record) => record.type === "response_item" &&
+        ["function_call_output", "custom_tool_call_output"].includes(record.payload?.type) &&
+        record.payload.call_id === call.call_id)?.payload;
+      expect(result, "The denial must come from the matching native tool result").toBeTruthy();
+      const toolOutput = typeof result.output === "string" ? result.output : result.output.map((part: any) => part.text ?? "").join("\n");
+      expect(toolOutput).toContain(marker);
+      expect(toolOutput).toMatch(/operation not permitted|permission denied|read-only file system/i);
+      expect(toolOutput).toMatch(/"exit_code"\s*:\s*[1-9]\d*|exited with code\s+[1-9]\d*/i);
+      writeFileSync("/tmp/orbit-codex-live-clean-readonly.json", JSON.stringify({
+        version: detectCodex().version, readonlyModel: "passed", actualRead: true,
+        correlatedShellWriteDenied: true, inputUnchanged: true, outputAbsent: true,
+        report: "done", threadId: handle.sessionId, testRepo: repo,
+      }));
+    } finally { await a.stopProcess("live-clean-readonly"); }
+  }, 120000);
 
   it("steers and interrupts a real shell job without leaving background writes alive", async () => {
     const dir = tmpDir("orbit-codex-live-controls"); const repo = await makeGitRepo(dir);

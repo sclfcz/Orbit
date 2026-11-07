@@ -6,7 +6,7 @@ Orbit drives the official [Codex app-server](https://developers.openai.com/codex
 
 Install the independent CLI using the [official instructions](https://developers.openai.com/codex/cli). Pin a compatible version instead of following a moving latest tag: `npm install -g @openai/codex@0.167.0`. Run `command -v codex`, `codex --version`, and `codex login status` on the Connector machine. If not already logged in, the owner runs `codex login`. Orbit does not copy authentication files or alter global Codex configuration. Ensure `codex` is on the **daemon's** PATH, which may differ from an interactive shell. Restart the Connector after installation. The integration never hardcodes an app-bundle binary path; deployments should install a separate CLI.
 
-Native protocol and writer-lock implementation traced at **0.166.0-alpha.6**; real acceptance also passed with independently installed **0.167.0**. The stable CLI passed worktree writes/reports, competing-writer exclusion, continuation, steer/interrupt cleanup, local history, Connector restarts and uncertain-crash no-replay checks. Readonly model execution remains unverified because inherited external tools trigger safe refusal. Discovery accepts stable and alpha releases within the 0.166/0.167 family, starting at 0.166.0-alpha.6; older or other versions produce `codex_unavailable` diagnostics. This is a compatibility gate, not certification of every accepted release. CLI discovery runs only `--version` with a five-second timeout, not a model task. A configured model is passed explicitly and persisted; an unspecified model is omitted when resuming so Codex retains its saved choice. Login/model availability must still be checked with a real turn.
+Native protocol and writer-lock implementation traced at **0.166.0-alpha.6**; real acceptance also passed with independently installed **0.167.0**. The stable CLI passed worktree writes/reports, competing-writer exclusion, continuation, steer/interrupt cleanup, local history, Connector restarts and uncertain-crash no-replay checks. A real readonly model turn also passed in a separately authenticated clean Codex home, including actual file reading and a tool-result-confirmed write denial; inherited external tools still trigger safe refusal. Discovery accepts stable and alpha releases within the 0.166/0.167 family, starting at 0.166.0-alpha.6; older or other versions produce `codex_unavailable` diagnostics. This is a compatibility gate, not certification of every accepted release. CLI discovery runs only `--version` with a five-second timeout, not a model task. A configured model is passed explicitly and persisted; an unspecified model is omitted when resuming so Codex retains its saved choice. Login/model availability must still be checked with a real turn.
 
 ## Behavior and recovery
 
@@ -27,3 +27,35 @@ Open the worker session in the workspace while its machine is online. The Connec
 Fake app-server and shared-path regressions cover handshake, fragmented/early/duplicate notifications, server-request refusal, timeout and early exit, strict reports, steer/interrupt races, identity persistence, missing-path and receipt windows, FIFO recovery, and full-history fragmentation/replacement. Run the pinned package-manager checks from the [implementation plan](plans/codex-cli-integration.md).
 
 Real acceptance must separately cover a dedicated test repository: readonly enforcement and worktree writes, final report, steer and interrupt, process stop, cold continuation after restart, and local history. The opt-in `test/codex-live.test.ts` includes native sandbox denial/positive control and competing-writer refusal before input, followed by same-ID continuation after release. `test/codex-connector-live.test.ts` adds real Connector subprocess restarts, WS history reconstruction and uncertain-crash no-replay checks; cold continuation must now succeed while an unrelated real app-server stays alive. Run with `ORBIT_CODEX_LIVE=1` and a supported `codex` on the test process's PATH. The subprocess test also accepts `ORBIT_CODEX_COMMAND` as one executable path. The old blanket-refusal classification is no longer accepted as a passing cold-continuation result. Standalone command sandbox evidence does not certify a readonly model turn with inherited external tools. A desktop-bundled binary found on PATH and a successful `login status` alone do **not** establish this acceptance. See the [implementation validation record](codex-cli-validation.md) for actual outcomes and remaining gates.
+
+### Clean readonly acceptance
+
+Use a new private directory as `CODEX_HOME`, with its own `config.toml`:
+
+```toml
+web_search = "disabled"
+
+[features]
+apps = false
+plugins = false
+hooks = false
+browser_use = false
+computer_use = false
+multi_agent = false
+```
+
+The owner authenticates that home through native login:
+
+```bash
+CODEX_HOME=/absolute/path/to/clean-codex-home codex login
+```
+
+A new home does not automatically share the old home's login. Both file credentials and [native keyring lookup](https://github.com/openai/codex/blob/rust-v0.167.0/codex-rs/login/src/auth/storage.rs#L302-L320) are home-scoped; do not copy or link authentication files. An empty-table CLI override merges with inherited configuration instead of clearing it, and a profile layers over the base configuration. The isolated setup leaves the existing home and desktop configuration intact.
+
+Run the dedicated model acceptance from the repository root:
+
+```bash
+ORBIT_CODEX_LIVE=1 ORBIT_CODEX_READONLY_HOME=/absolute/path/to/clean-codex-home pnpm --dir apps/connector exec vitest run test/codex-live.test.ts -t 'reads through a clean readonly model turn'
+```
+
+This test requires actual model execution through CodexAdapter: it checks an undisclosed random file marker, correlates the shell call with its native permission-denied result and nonzero exit code, verifies unchanged input and absent output, and requires a structured report. It does not accept preflight refusal as success. `ORBIT_CODEX_READONLY_HOME` is a test-only input; it does not change the daemon's configured home. Continue using the original home for existing workers and threads; this acceptance creates new test threads in the isolated home.
