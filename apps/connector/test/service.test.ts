@@ -1,11 +1,18 @@
 // Service installers (issue #26): launchd agent on macOS, systemd user unit on Linux.
 // All manager commands go through an injected exec, so these tests assert the unit files'
 // content and the exact launchctl/systemctl invocations without touching the real system.
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getServiceInstaller, SIG_LABEL, type Exec, type ExecResult, type ServiceSpec } from "../src/service.ts";
+import {
+  getServiceInstaller,
+  readServicePath,
+  SIG_LABEL,
+  type Exec,
+  type ExecResult,
+  type ServiceSpec,
+} from "../src/service.ts";
 
 let home: string;
 
@@ -85,6 +92,7 @@ describe("LaunchdService", () => {
     expect(content).toContain("<true/>");
     expect(content).toContain("<key>PATH</key>");
     expect(content).toContain(join(home, ".sig", "logs", "launchd.out.log"));
+    expect(readServicePath(installer)).toBe("/usr/local/bin:/usr/bin:/bin");
 
     expect(calls[0]).toEqual({ file: "launchctl", args: ["print", `gui/501/${SIG_LABEL}`] });
     expect(calls[1]).toEqual({ file: "launchctl", args: ["enable", `gui/501/${SIG_LABEL}`] });
@@ -129,6 +137,16 @@ describe("LaunchdService", () => {
 
     await installer.start();
     expect(bootstraps).toBe(3);
+  });
+
+  it("returns null for a missing or unreadable service PATH", async () => {
+    const { exec } = recordingExec();
+    const installer = getServiceInstaller(spec(), deps(exec))!;
+    expect(readServicePath(installer)).toBeNull();
+
+    mkdirSync(dirname(installer.unitPath), { recursive: true });
+    writeFileSync(installer.unitPath, "<plist><dict></dict></plist>");
+    expect(readServicePath(installer)).toBeNull();
   });
 
   it("throws when bootstrap keeps failing", async () => {
@@ -239,6 +257,7 @@ describe("SystemdService", () => {
     expect(content).toContain('Environment="PATH=/usr/local/bin:/usr/bin:/bin"');
     expect(content).toContain("Restart=on-failure");
     expect(content).toContain("WantedBy=default.target");
+    expect(readServicePath(installer)).toBe("/usr/local/bin:/usr/bin:/bin");
 
     expect(calls[0]).toEqual({ file: "systemctl", args: ["--user", "daemon-reload"] });
     expect(calls[1]).toEqual({ file: "systemctl", args: ["--user", "enable", "--now", `${SIG_LABEL}.service`] });

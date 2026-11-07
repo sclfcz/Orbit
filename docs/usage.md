@@ -46,3 +46,7 @@ Two exact phrases stay deterministic and never reach the model — they mint cre
 Open the deployment URL and sign in with the deployment password or a registered passkey. Either method creates a seven-day browser session. Existing explicit-key deployments can still use `POST /api/login-link` for a single-use login link. See [browser access and recovery](deploy.md#opening-the-web-workspace).
 
 Each Thread exposes its workers' **session records** ([ADR-0005](adr/0005-web-entry-and-local-sessions.md)): the full recorded session — messages, tool calls and results, images, compaction notes — streamed from the machine through the Durable Object over the browser socket and never stored or logged server-side (protocol doc §6.6). The connector serves it from the live agent process or, once the process is gone, from the session file on disk, resumable with a cursor and bounded per page; an offline machine shows why the record is unavailable instead of an empty page. Machines are listed and revoked in the workspace too (撤销 bumps the device epoch and closes the connection with 4403, so a stolen token dies instantly).
+
+## Codex CLI workers
+
+Codex is available through the existing AgentAdapter and worker-session flows when its local CLI is detected. Explicitly select `codex`; default worker selection is unchanged. See [setup, capabilities and recovery boundaries](codex-cli.md) and [ADR-0013](adr/0013-codex-cli-workers.md). All after messages now use the Connector’s durable FIFO; ambiguous delivery never authorizes replay.

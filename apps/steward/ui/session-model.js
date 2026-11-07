@@ -211,6 +211,34 @@ function claudeEntry(record) {
   }
 }
 
+// Codex rollouts contain response_item plus mirrored event_msg records. Render message
+// content from response_item once; keep mirrored metadata inspectable without duplicate text.
+const CODEX_TYPES = new Set(['session_meta', 'response_item', 'event_msg', 'turn_context', 'compacted']);
+/** @returns {Array<{ t: string, [key: string]: any }>} */
+function codexEntry(record) {
+  const p = isObject(record.payload) ? record.payload : {};
+  if (record.type === 'session_meta') return [meta('session', asText(p.cwd), asText(p.id))];
+  if (record.type === 'turn_context') return [meta('context', asText(p.model), pretty(p))];
+  if (record.type === 'compacted') return [meta('compaction', '', asText(p.message) || pretty(p))];
+  if (record.type === 'event_msg') {
+    if (['user_message', 'agent_message', 'agent_reasoning'].includes(p.type)) return [meta('event', asText(p.type))];
+    if (p.type === 'error') return [meta('error', '', asText(p.message) || pretty(p))];
+    return [raw(asText(p.type) || 'event', record)];
+  }
+  if (record.type === 'response_item') {
+    if (p.type === 'message') return (Array.isArray(p.content) ? p.content : []).map((b) =>
+      ['input_text', 'output_text'].includes(b.type) ? { t: 'text', role: p.role === 'assistant' ? 'assistant' : 'user', text: asText(b.text) } : raw(asText(b.type) || 'content', b));
+    if (p.type === 'function_call' || p.type === 'custom_tool_call') {
+      let input = p.arguments ?? p.input;
+      if (typeof input === 'string') { try { input = JSON.parse(input); } catch {} }
+      return [{ t: 'tool_call', callId: asText(p.call_id), name: asText(p.name), input }];
+    }
+    if (p.type === 'function_call_output' || p.type === 'custom_tool_call_output') return [toolResult(asText(p.call_id), '', p.output, false)];
+    if (p.type === 'reasoning') return [{ t: 'thinking', text: (p.summary ?? []).map((v) => asText(v.text)).join('\n'), redacted: !!p.encrypted_content }];
+  }
+  return [raw(asText(p.type) || record.type, record)];
+}
+
 /**
  * One recorded entry, ready to draw. `id`/`parentId` place it in the agent's conversation tree
  * (null for entries outside it, like pi's file header); `agent` says which format it was.
@@ -218,7 +246,7 @@ function claudeEntry(record) {
 export function describeRecord(record) {
   if (!isObject(record)) return { id: null, parentId: null, at: null, agent: 'unknown', sidechain: false, model: '', blocks: [raw('entry', record)] };
   const type = asText(record.type);
-  const agent = PI_TYPES.has(type) ? 'pi' : typeof record.uuid === 'string' || ['user', 'assistant', 'system', 'summary'].includes(type) ? 'claude' : 'unknown';
+  const agent = CODEX_TYPES.has(type) ? 'codex' : PI_TYPES.has(type) ? 'pi' : typeof record.uuid === 'string' || ['user', 'assistant', 'system', 'summary'].includes(type) ? 'claude' : 'unknown';
   const id = type === 'session' ? null : asText(record.id) || asText(record.uuid) || null;
   const parent = record.parentId ?? record.parentUuid;
   const at = Date.parse(asText(record.timestamp));
@@ -230,7 +258,7 @@ export function describeRecord(record) {
     agent,
     sidechain: record.isSidechain === true,
     model: asText(message.model),
-    blocks: agent === 'pi' ? piEntry(record) : agent === 'claude' ? claudeEntry(record) : [raw(type || 'entry', record)],
+    blocks: agent === 'codex' ? codexEntry(record) : agent === 'pi' ? piEntry(record) : agent === 'claude' ? claudeEntry(record) : [raw(type || 'entry', record)],
   };
 }
 

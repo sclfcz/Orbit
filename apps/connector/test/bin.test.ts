@@ -2,7 +2,8 @@
 // builds. This is the `npx @sclfcz/orbit` surface: the Node gate, --version, usage, and
 // the read-only subcommands on a clean SIG_HOME.
 import { execFile } from "node:child_process";
-import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
@@ -12,7 +13,7 @@ import { VERSION } from "../src/version.ts";
 import { LocalStore } from "../src/store.ts";
 
 const exec = promisify(execFile);
-const bin = join(import.meta.dirname, "..", "bin", "sig.js");
+const bin = join(import.meta.dirname, "..", "bin", "orbit.js");
 
 let home: string;
 let stateDir: string;
@@ -54,6 +55,73 @@ function seedRegisteredRepo(repo: string, directory = stateDir): void {
     store.addRepo({ repoId: path, name: basename(path), path, capability: { kind: "git", gitRoot: path, defaultBranch: "main", remote: null } });
   } finally {
     store.close();
+  }
+}
+
+/** A `codex` executable for PATH-based discovery; optionally pins a fake version. */
+function fakeCodexBin(version?: string): string {
+  const dir = join(home, "codex-bin");
+  mkdirSync(dir, { recursive: true });
+  const fake = join(import.meta.dirname, "fake-codex.mjs");
+  const pin = version ? ` --fake-version="codex-cli ${version}"` : "";
+  writeFileSync(join(dir, "codex"), `#!/bin/sh\nexec "${process.execPath}" "${fake}" "$@"${pin}\n`, { mode: 0o755 });
+  return dir;
+}
+
+/** Writes the installed unit shape each service manager uses, recording `path`. */
+function seedServicePath(path: string): void {
+  if (process.platform === "darwin") {
+    const dir = join(home, "Library", "LaunchAgents");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "dev.sig.connector.plist"),
+      `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.sig.connector</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>${path}</string>
+    </dict>
+</dict>
+</plist>
+`,
+    );
+  } else if (process.platform === "linux") {
+    const dir = join(home, ".config", "systemd", "user");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "dev.sig.connector.service"),
+      `[Service]\nEnvironment="PATH=${path}"\n`,
+    );
+  } else {
+    throw new Error(`unsupported test platform: ${process.platform}`);
+  }
+}
+
+function seedCredentials(serverUrl: string): void {
+  const store = new LocalStore(join(stateDir, "connector.sqlite"));
+  try {
+    store.saveCredentials({ serverUrl, deviceId: "dev_test", token: "test-token" });
+  } finally {
+    store.close();
+  }
+}
+
+async function withReachableSteward(body: (url: string) => Promise<void>): Promise<void> {
+  const server = createServer((_req, res) => {
+    res.writeHead(401, { "content-type": "text/plain" });
+    res.end("login required");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("expected a TCP address");
+  try {
+    await body(`http://127.0.0.1:${address.port}`);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 }
 
@@ -115,6 +183,58 @@ describe("bin/orbit.js (skipped when dist has not been built)", () => {
     expect(res.stdout).toContain(`orbit ${VERSION}`);
     expect(res.stdout).toContain("not installed");
     expect(res.stdout).toContain("not paired");
+  });
+
+  it("doctor reports Codex for this shell and for the installed service PATH", async () => {
+    const binPath = fakeCodexBin();
+    seedServicePath(binPath);
+    const res = await run(["doctor"], { PATH: binPath });
+
+    expect(res.stdout).toMatch(/codex \(this shell\):\s+codex-cli 0\.166\.0-alpha\.6/);
+    expect(res.stdout).toMatch(/codex \(service PATH\):\s+codex-cli 0\.166\.0-alpha\.6/);
+    expect(res.stdout).not.toContain("orbit upgrade");
+  });
+
+  it("doctor explains how to refresh a service PATH that misses Codex", async () => {
+    const binPath = fakeCodexBin();
+    const empty = join(home, "empty-path");
+    mkdirSync(empty);
+    seedServicePath(empty);
+    const res = await run(["doctor"], { PATH: binPath });
+
+    expect(res.stdout).toMatch(/codex \(this shell\):\s+codex-cli 0\.166\.0-alpha\.6/);
+    expect(res.stdout).toMatch(/codex \(service PATH\):\s+not found/);
+    expect(res.stdout).toContain(`run \`orbit upgrade --version ${VERSION}\` from this shell`);
+    expect(res.stdout).toContain("for a source install, repeat the source install steps");
+    expect(res.stdout).toContain("`orbit restart` keeps the recorded PATH");
+  });
+
+  it("doctor reports an incompatible Codex version in either environment", async () => {
+    const binPath = fakeCodexBin("0.168.0");
+    seedServicePath(binPath);
+    const res = await run(["doctor"], { PATH: binPath });
+
+    expect(res.stdout).toMatch(/codex \(this shell\):\s+incompatible — Unsupported Codex CLI protocol: codex-cli 0\.168\.0/);
+    expect(res.stdout).toMatch(/codex \(service PATH\):\s+incompatible — Unsupported Codex CLI protocol: codex-cli 0\.168\.0/);
+  });
+
+  it("doctor readiness and exit code do not depend on Codex", async () => {
+    await withReachableSteward(async (url) => {
+      seedCredentials(url);
+      const binPath = fakeCodexBin();
+      seedServicePath(binPath);
+      const withCodex = await run(["doctor"], { PATH: binPath });
+      expect(withCodex.code).toBe(0);
+      expect(withCodex.stdout).toMatch(/codex \(this shell\):\s+codex-cli 0\.166\.0-alpha\.6/);
+
+      const empty = join(home, "no-codex");
+      mkdirSync(empty);
+      seedServicePath(empty);
+      const withoutCodex = await run(["doctor"], { PATH: empty });
+      expect(withoutCodex.code).toBe(withCodex.code);
+      expect(withoutCodex.stdout).toMatch(/codex \(this shell\):\s+not found/);
+      expect(withoutCodex.stdout).toMatch(/codex \(service PATH\):\s+not found/);
+    });
   });
 
   it("daemon without credentials exits 1 with a pairing hint", async () => {

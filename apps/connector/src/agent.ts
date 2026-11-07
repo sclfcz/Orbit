@@ -36,10 +36,14 @@ export interface StartSpec {
   prompt: string;
   /** Correlates the run window with the steward command (ADR-0001 marker). */
   commandId: string;
-  /** §6.3/§10 recovery evidence: fires exactly once after get_state answers and BEFORE the
-   *  prompt is sent — with the session file and its current tail entry id (null file when
-   *  the agent reports none), so a crash anywhere past this point stays decidable. */
-  onSession?: (sessionFile: string | null, lastKnownEntryId: string | null) => void;
+  /** §6.3/§10 recovery evidence, BEFORE work input. Pi supplies its file/tail after get_state;
+   *  Codex also supplies thread.id after thread/start/resume, even when path is null.
+   *  An adapter using an asynchronous persistence hook must await it before input. */
+  onSession?: (sessionFile: string | null, lastKnownEntryId: string | null, sessionId?: string) => void | Promise<void>;
+  /** Durable write-ahead/receipt boundary. Awaited before input is written, and after RPC acceptance. */
+  onDelivery?: (commandId: string, state: "sending" | "delivered" | "not_delivered", turnId?: string) => void | Promise<void>;
+  /** Persist ownership before sending work; a pid alone is not a reusable identity. */
+  onProcess?: (ref: { pid: number; startTime?: string }) => void;
   /** approveProject (§13): the repo's local trust flag — pi runs with --approve. Never
    * taken from the command; set by the WorkerManager from the LocalStore's repo row. */
   approveProject?: boolean;

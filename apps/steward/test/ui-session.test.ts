@@ -11,6 +11,21 @@ const fragments = (id: string, text: string, size: number) => {
   return out;
 };
 
+describe("Codex local rollout records", () => {
+  it("normalizes messages and tool calls, with mirrored events rendered only as metadata", () => {
+    const message = describeRecord({ type: "response_item", timestamp: "2026-11-06T00:00:00Z", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "answer" }] } });
+    expect(message.agent).toBe("codex");
+    expect(message.blocks).toEqual([{ t: "text", role: "assistant", text: "answer" }]);
+    expect(describeRecord({ type: "event_msg", payload: { type: "agent_message", message: "answer" } }).blocks).toEqual([{ t: "meta", kind: "event", title: "agent_message", detail: "" }]);
+    expect(describeRecord({ type: "response_item", payload: { type: "function_call", call_id: "call-1", name: "exec_command", arguments: '{"cmd":"ls"}' } }).blocks).toEqual([{ t: "tool_call", callId: "call-1", name: "exec_command", input: { cmd: "ls" } }]);
+  });
+  it("keeps errors, compaction and unknown records inspectable", () => {
+    expect(describeRecord({ type: "event_msg", payload: { type: "error", message: "failed" } }).blocks[0]).toMatchObject({ kind: "error", detail: "failed" });
+    expect(describeRecord({ type: "compacted", payload: { message: "summary" } }).blocks[0]).toMatchObject({ kind: "compaction", detail: "summary" });
+    expect(describeRecord({ type: "response_item", payload: { type: "future_record", custom: 42 } }).blocks[0]).toMatchObject({ t: "raw", title: "future_record" });
+  });
+});
+
 describe("reassembling a recorded entry", () => {
   it("joins fragments, across as many pages as it took, into the record that was written", () => {
     const record = { id: "a1", text: "日本語 🙂 ".repeat(50) };

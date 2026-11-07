@@ -39,6 +39,9 @@ describe("decideContinuation (spec §5.3: resume vs new session)", () => {
   });
 
   it("new session on an agent or machine switch", () => {
+    expect(decideContinuation({ previous: worker(), next: { ...next, agent: "codex" }, freshReview: false })).toMatchObject({
+      action: "new_session", reason: "agent_switch",
+    });
     expect(decideContinuation({ previous: worker(), next: { ...next, agent: "claude-code" }, freshReview: false })).toMatchObject({
       action: "new_session",
       reason: "agent_switch",

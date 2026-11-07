@@ -86,3 +86,7 @@ orbit uninstall   # removes the service, preserves local state
 ```
 
 State is stored in `~/.sig/`. The owner can revoke a machine from the workspace at any time. See [deploy.md](deploy.md) for updates and operations, and [usage.md](usage.md) for agent behavior and session viewing.
+
+## Codex CLI workers
+
+Codex is available through the existing AgentAdapter and worker-session flows when its local CLI is detected. Explicitly select `codex`; default worker selection is unchanged. See [setup, capabilities and recovery boundaries](codex-cli.md) and [ADR-0013](adr/0013-codex-cli-workers.md). All after messages now use the Connector’s durable FIFO; ambiguous delivery never authorizes replay.

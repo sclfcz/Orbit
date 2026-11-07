@@ -7,14 +7,15 @@
 // watchdog (issue #13, ADR-0001): silent + cold-CPU workers get one in-place respawn, then
 // settle as error:stall.
 import type { AgentAdapter, Delivery, ErrorClass, RawAdapterEvent, StartSpec, WorkerHandle, WorkerMode } from "./agent.ts";
-import { PartialInterruptError } from "./agent.ts";
+import { AdapterError, PartialInterruptError } from "./agent.ts";
 import { classifyError } from "./adjudication.ts";
 import { killOrphans, listDescendants, type ProcRef } from "./descendants.ts";
 import { collectGitFacts } from "./git-facts.ts";
 import { openPr, PrError, type PrExec } from "./pr.ts";
-import { acquireLock, markLocksHeldByDeadProcess, releaseLock, removeStaleLocks } from "./locks.ts";
+import { acquireLock, isLockHeld, markLocksHeldByDeadProcess, pidAlive, processStartTime, releaseLock, removeStaleLocks } from "./locks.ts";
 import { RESUME_PROMPT, PiAdapter } from "./pi-adapter.ts";
-import { externalActivity, observeSession } from "./session-observation.ts";
+import { externalActivity, inspectCommandDelivery, observeSession } from "./session-observation.ts";
+import { codexSessionPath, inspectCodexTail, observeCodexSession } from "./codex-session.ts";
 import { findSessionHolders } from "./session-holders.ts";
 import { ProgressThrottle } from "./progress.ts";
 import { inspectSessionTail, type SessionTail } from "./session-tail.ts";
@@ -243,13 +244,7 @@ export class WorkerManager {
   /** Sends held while the worker is starting/recovering/lost (§6.2 queue rows); drained
    *  when the transition completes, superseded by an interrupt (protocol §7.4). */
   private readonly pendingSends = new Map<string, PendingSend[]>();
-  /** §3 degradation (issue #17): sends that landed mid-run on an agent that cannot steer
-   *  (Claude Code headless). Delivered as the next prompt when the run settles; flushed
-   *  back as `queue_returned` when the run ends any other way — never dropped. In memory
-   *  on purpose: a connector crash loses them exactly like it loses a steer pi already
-   *  queued (the command result went out in both cases), and the steward's re-ask path —
-   *  not silent replay — is the recovery for both. */
-  private readonly deferredSends = new Map<string, DeferredSend[]>();
+  private readonly drainingDeferred = new Set<string>();
   /** The in-flight start/resume transition per worker: what `interrupt` waits out and what
    *  drains the send queue when it settles. */
   private readonly transitions = new Map<string, Promise<unknown>>();
@@ -578,7 +573,7 @@ export class WorkerManager {
       };
 
       try {
-        handle = await adapter.start(spec);
+        handle = await this.startAdapter(adapter, spec);
       } catch (err) {
         if (this.stopRequested.has(args.workerId)) {
           // The stop could not kill what had not spawned; the start raced it and lost.
@@ -697,7 +692,7 @@ export class WorkerManager {
       return;
     }
     const inFlight = worker ? IN_FLIGHT_STATES.has(worker.state) || worker.state === "lost" : false;
-    if (inFlight && this.launching.has(workerId)) this.stopRequested.add(workerId);
+    if ((inFlight && this.launching.has(workerId)) || (worker && this.transitions.has(workerId))) this.stopRequested.add(workerId);
     // Cancel a pending automatic resume: the stop is the user's final word for this run.
     const timer = this.resumeTimers.get(workerId);
     if (timer) {
@@ -771,6 +766,9 @@ export class WorkerManager {
       );
       for (const repoId of repos) {
         this.pumpOnce(repoId);
+      }
+      for (const worker of this.store.listWorkers()) {
+        if (worker.state === "idle" && this.store.deferred(worker.workerId)[0]?.state === "queued") void this.drainDeferredSends(worker.workerId);
       }
       // Parked sends (§8.2 serial, the deliverSend guard above): a slot that freed with no
       // queued worker may still owe a send-relaunch. Idle workers only — entries parked for
@@ -994,14 +992,20 @@ export class WorkerManager {
    * starting/lost/recovering queue until the transition completes. §6.3 image cap applies.
    */
   private async sendToWorker(commandId: string, args: SendArgs): Promise<SendResult> {
-    const worker = this.requireWorker(args.workerId);
+    let worker = this.requireWorker(args.workerId);
+    this.guardDelivery(worker);
+    if (worker.agent === "codex" && (worker.state === "running" || worker.state === "recovering") &&
+      this.adapterOfWorker(worker).isRunning?.(worker.workerId) && !this.adapterOfWorker(worker).isStreaming?.(worker.workerId)) {
+      worker = await this.awaitSettleBeforeThen(worker.workerId);
+      if (worker.state === "running" || worker.state === "recovering") throw new CommandError("settling", "The previous Codex turn is still being settled; retry after its report", true);
+    }
     if (args.text.length === 0) throw new CommandError("bad_request", "text is required");
     for (const image of args.images ?? []) {
       if (!image.data || image.data.length > 4 * 1024 * 1024) {
         throw new CommandError("too_large", "image exceeds the 4 MB base64 limit");
       }
     }
-    if (worker.state === "broken") {
+    if (worker.state === "broken" || worker.agent === "codex" && worker.lastOutcome === "delivery_ambiguous") {
       throw new CommandError("broken_worker", `worker ${args.workerId} is broken and needs a human decision`);
     }
     // §3 gate (PR #59 review finding 2): the images check is NOT start_worker-only — every
@@ -1015,6 +1019,11 @@ export class WorkerManager {
           `agent '${worker.agent ?? "pi"}' cannot take images (capability images=false); send text only or dispatch to another agent`,
         );
       }
+    }
+    const canSteerNow = args.intent !== "after" && worker.state === "running" &&
+      this.adapterOfWorker(worker).capabilities.steer && this.adapterOfWorker(worker).isStreaming?.(worker.workerId);
+    if (this.store.deferred(args.workerId).length > 0 && !canSteerNow) {
+      return this.deferSendUntilRunEnd(worker, commandId, args, "follow_up");
     }
     this.cancelIdleReclaim(args.workerId); // the send revives the worker
     if (worker.state === "starting" || worker.state === "recovering" || worker.state === "lost") {
@@ -1041,6 +1050,8 @@ export class WorkerManager {
     commandId: string,
     input: { text: string; intent: SendArgs["intent"]; images?: SendArgs["images"] },
   ): Promise<SendResult> {
+    worker = this.requireWorker(worker.workerId);
+    this.guardDelivery(worker);
     const { workerId } = worker;
     // §8.2 serial repos (issue #16): an idle/reviving write worker must re-acquire the
     // repo's single write slot before it may run again — a hot prompt or cold relaunch
@@ -1078,7 +1089,7 @@ export class WorkerManager {
       // waits in pi's queue for the next one. Never lost, never racing.
       const how: Delivery = input.intent === "after" ? "follow_up" : "steer";
       const capable = input.intent === "after" ? adapter.capabilities.followUp : adapter.capabilities.steer;
-      if (!capable) {
+      if (input.intent === "after" || !capable) {
         // §3 degradation (issue #17): headless agents have no mid-run channel. The send
         // parks until the run settles and is then delivered as the next prompt; the command
         // result says so (effect: after_run_end) so the steward never promises a steer.
@@ -1110,6 +1121,8 @@ export class WorkerManager {
     commandId: string,
     input: { text: string; images?: SendArgs["images"] },
   ): Promise<SendResult> {
+    worker = this.requireWorker(worker.workerId);
+    this.guardDelivery(worker);
     const { workerId } = worker;
     this.store.setWorkerState(workerId, "running");
     this.expectCommandMarker(commandId, workerId);
@@ -1120,7 +1133,9 @@ export class WorkerManager {
       this.armIdleReclaim(workerId);
       throw err;
     }
-    await this.emitEvent(workerId, "started", { sessionId: worker.sessionId ?? workerId, cwd: worker.worktree ?? undefined });
+    if (this.store.getWorker(workerId)?.state === "running") {
+      await this.emitEvent(workerId, "started", { sessionId: worker.sessionId ?? workerId, cwd: worker.worktree ?? undefined });
+    }
     return { delivery: "prompt" };
   }
 
@@ -1132,20 +1147,25 @@ export class WorkerManager {
     input: { text: string; images?: SendArgs["images"] },
   ): Promise<SendResult> {
     const { workerId } = worker;
+    if (this.stopRequested.delete(workerId)) throw new CommandError("aborted", "worker was stopped before send");
     const repo = this.store.getRepo(worker.repoId);
     const cwd = worker.worktree ?? repo?.path;
     if (!cwd) throw new CommandError("startup_failed", `no worktree or repo path to reach worker ${workerId} in`);
     const lock = acquireLock(this.stateDir, workerId);
     if (!lock.ok) throw new CommandError("lock_held", `worker ${workerId} is locked by pid ${lock.pid}`, true);
-    // §10 gate before any state claim: a refusal (session_in_use) must leave the worker
-    // exactly as it was — idle, lock released — so a retry after the holder exits works.
+    // Reserve the slot and make stop cancellation visible before the prelaunch await.
+    // A refused check restores the original state; an explicit stop remains final.
+    this.launching.add(workerId);
+    this.store.setWorkerState(workerId, "starting");
     try {
       await this.checkSessionBeforeRelaunch(worker);
+      if (this.stopRequested.has(workerId)) throw new CommandError("aborted", "worker was stopped during send");
     } catch (err) {
       releaseLock(this.stateDir, workerId);
+      this.launching.delete(workerId);
+      if (!this.stopRequested.delete(workerId)) this.store.setWorkerState(workerId, worker.state);
       throw err;
     }
-    this.store.setWorkerState(workerId, "starting");
     this.active.set(workerId, {
       repoId: worker.repoId,
       worktree: worker.worktree ?? undefined,
@@ -1172,7 +1192,17 @@ export class WorkerManager {
       resumeSessionId: worker.sessionId ?? undefined,
     };
     try {
-      const handle = await this.adapterOfWorker(worker).start(spec);
+      const handle = await this.startAdapter(this.adapterOfWorker(worker), spec);
+      if (this.stopRequested.has(workerId)) {
+        await this.adapterOfWorker(worker).stopProcess(workerId).catch(() => undefined);
+        throw new CommandError("aborted", "worker was stopped during send");
+      }
+      if (this.requireWorker(workerId).state !== "starting") {
+        // A terminal event can complete before start resolves. Preserve its state and
+        // outcome, and do not publish a stale started event after its settlement.
+        this.store.setSessionIdentity(workerId, handle.sessionId, handle.sessionFile ?? null);
+        return { delivery: "prompt", relaunched: true };
+      }
       this.store.upsertWorker({
         workerId,
         threadId: worker.threadId,
@@ -1195,11 +1225,16 @@ export class WorkerManager {
     } catch (err) {
       releaseLock(this.stateDir, workerId);
       this.active.delete(workerId);
-      this.store.setWorkerState(workerId, "idle");
-      this.armIdleReclaim(workerId); // no live process → the reclaim no-ops; keeps the idle paths symmetric
+      if (!this.stopRequested.has(workerId)) {
+        this.store.setWorkerState(workerId, "idle");
+        this.armIdleReclaim(workerId);
+      }
       const code = (err as { code?: string }).code ?? "startup_failed";
       const message = err instanceof Error ? err.message : String(err);
-      throw new CommandError(code, `cold-start send failed: ${message}`);
+      throw new CommandError(code, `cold-start send failed: ${message}`, err instanceof AdapterError && err.retriable);
+    } finally {
+      this.launching.delete(workerId);
+      this.stopRequested.delete(workerId);
     }
   }
 
@@ -1236,6 +1271,7 @@ export class WorkerManager {
       if (deferred.length > 0) {
         returned = deferred.map((send) => send.text);
         await this.emitEvent(args.workerId, "queue_returned", { texts: returned, reason: "interrupted" });
+        for (const send of deferred) this.store.setDeferredState(send.commandId, "returned");
       }
       if (adapter.isRunning?.(args.workerId)) {
         let interruptResult: Awaited<ReturnType<AgentAdapter["interrupt"]>>;
@@ -1397,55 +1433,56 @@ export class WorkerManager {
     input: { text: string; images?: SendArgs["images"] },
     how: Delivery,
   ): Promise<SendResult> {
-    const queue = this.deferredSends.get(worker.workerId) ?? [];
-    this.deferredSends.set(worker.workerId, queue);
-    queue.push({ commandId, text: input.text, images: input.images });
+    this.store.queueDeferred(worker.workerId, commandId, input);
     return {
-      delivery: "queued",
-      effect: "after_run_end",
-      degraded: `${worker.agent ?? "pi"} cannot ${how} mid-run; the text is delivered as the next prompt when the current run ends`,
+      delivery: "queued", effect: "after_run_end",
+      ...(how === "steer" ? { degraded: `${worker.agent ?? "pi"} cannot steer mid-run; queued durably until run end` } : {}),
     };
   }
 
-  /** Delivers a no-steer agent's deferred sends once its run settled (the settled handler
-   *  calls this). Serial by nature: a delivery that lands while the NEXT run is already
-   *  going simply defers again — never lost, never racing. */
   private async drainDeferredSends(workerId: string): Promise<void> {
-    const queue = this.deferredSends.get(workerId);
-    if (!queue || queue.length === 0) return;
-    this.deferredSends.delete(workerId);
-    for (const [index, send] of queue.entries()) {
-      if (this.crashed) {
-        // A shutdown mid-drain: the remaining texts keep their slot for the next life —
-        // they were promised delivery, so they are never silently dropped.
-        this.deferredSends.set(workerId, queue.slice(index));
-        return;
-      }
+    if (this.crashed || this.drainingDeferred.has(workerId)) return;
+    this.drainingDeferred.add(workerId);
+    let delivered = false;
+    try {
+      // Exactly one message per turn. An ambiguous head blocks the whole FIFO.
+      const send = this.store.deferred(workerId)[0];
+      if (!send || send.state !== "queued") return;
+      const worker = this.requireWorker(workerId);
+      if (worker.state !== "idle" || this.serialSlotHeldByAnother(worker)) return;
       try {
-        const worker = this.requireWorker(workerId);
-        if (worker.state === "broken") throw new CommandError("broken_worker", `worker ${workerId} is broken`);
         await this.deliverSend(worker, send.commandId, { text: send.text, intent: "auto", images: send.images });
+        this.store.setDeferredState(send.commandId, "delivered");
+        delivered = true;
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(`[orbit] deferred send failed for ${workerId}: ${message}`);
-        await this.emitEvent(workerId, "queue_returned", { texts: [send.text], reason: "undeliverable" });
+        const current = this.store.deferred(workerId).find((v) => v.commandId === send.commandId);
+        if (current?.state === "sending") {
+          this.store.setDeferredState(send.commandId, "ambiguous");
+          await this.breakWorker(workerId, "unknown", "Input delivery is uncertain. Inspect the local session before retrying; known-unsent FIFO successors have been returned.", "delivery_ambiguous");
+        } else if (current?.state === "queued") await this.flushDeferredSends(workerId, "undeliverable");
+      }
+    } finally {
+      this.drainingDeferred.delete(workerId);
+      // A terminal event may have tried to drain while delivery still owned this guard.
+      // Retry only after successful delivery; blocked/undeliverable heads must not spin.
+      if (delivered && !this.crashed && this.store.getWorker(workerId)?.state === "idle") {
+        await this.drainDeferredSends(workerId);
       }
     }
   }
 
-  /** Takes the deferred texts out (interrupt path: they ride `queue_returned`). */
+  /** Returning is durable before the event; a crash retries this notification (possibly twice). */
   private takeDeferredSends(workerId: string): DeferredSend[] {
-    const queue = this.deferredSends.get(workerId) ?? [];
-    this.deferredSends.delete(workerId);
+    const queue = this.store.deferred(workerId).filter((send) => send.state === "queued" || send.state === "returning");
+    for (const send of queue) this.store.setDeferredState(send.commandId, "returning");
     return queue;
   }
 
-  /** Returns the deferred texts to the steward as `queue_returned` — the run (or the
-   *  worker) ended in a way that will not deliver them (stop, broken, shutdown). */
   private async flushDeferredSends(workerId: string, why: string): Promise<void> {
     const queue = this.takeDeferredSends(workerId);
-    if (queue.length === 0) return;
+    if (!queue.length) return;
     await this.emitEvent(workerId, "queue_returned", { texts: queue.map((s) => s.text), reason: why });
+    for (const send of queue) this.store.setDeferredState(send.commandId, "returned");
   }
 
   // --- §4.1 idle reclamation -------------------------------------------------------------------
@@ -1502,9 +1539,11 @@ export class WorkerManager {
         const cwd = worker.worktree ?? this.store.getRepo(worker.repoId)?.path;
         path = worker.sessionId && cwd ? claudeSessionPath(cwd, worker.sessionId) : null;
       }
+      if (worker.agent === "codex") path = worker.sessionId ? codexSessionPath(worker.sessionId, path) : null;
       if (!path) throw new CommandError("no_history", "This worker has not recorded a local session yet.");
       return readFullSessionHistory(path, since, maxBytes);
     }
+    if (worker.agent === "codex") return this.history(workerId, since, maxBytes, "full");
     const adapter = this.adapterOfWorker(worker);
     if (typeof adapter.history === "function" && adapter.isRunning?.(workerId)) {
       try {
@@ -1533,11 +1572,22 @@ export class WorkerManager {
    */
   async reconcileStartup(): Promise<void> {
     for (const workerId of this.store.listOrphanSnapshots()) {
+      if (this.store.getWorker(workerId)?.agent === "codex" && isLockHeld(this.stateDir, workerId)) continue;
       await this.cleanupOrphans(workerId).catch(() => undefined);
     }
     removeStaleLocks(this.stateDir);
     for (const worker of this.store.listWorkers()) {
       if (this.crashed) return;
+      if (worker.agent === "codex") {
+        if (isLockHeld(this.stateDir, worker.workerId)) continue; // a live Connector still owns it
+        const ref = this.store.getAgentProcess(worker.workerId);
+        if (ref?.startTime) await this.killOrphansFn([ref]);
+      }
+      if (await this.reconcileDeferred(worker)) continue;
+      if (worker.agent === "codex" && (IN_FLIGHT_STATES.has(worker.state) || worker.state === "lost")) {
+        await this.reconcileCodex(worker);
+        continue;
+      }
       if (worker.state === "lost") {
         // A resume was pending when the connector died (e.g. killed mid-reconciliation or
         // inside the backoff window): schedule again — the persisted budget bounds this.
@@ -1551,6 +1601,11 @@ export class WorkerManager {
       } catch (err) {
         console.error(`[orbit] session-tail reconciliation failed for ${worker.workerId}:`, err);
       }
+    }
+    for (const worker of this.store.listWorkers()) {
+      if (worker.agent === "codex" && isLockHeld(this.stateDir, worker.workerId)) continue;
+      if (worker.state === "broken") await this.flushDeferredSends(worker.workerId, "broken");
+      else if (worker.state === "idle") await this.drainDeferredSends(worker.workerId);
     }
     // Queued write workers whose runner settled or broke over the restart can start now.
     this.pumpQueuedWorkers();
@@ -1614,6 +1669,11 @@ export class WorkerManager {
    * when the timer fires, so a worker that keeps dying cannot loop (≤2/hour, then broken). */
   private scheduleAutoResume(workerId: string, reason: string): void {
     if (this.crashed || this.resumeTimers.has(workerId)) return;
+    if (this.store.deferred(workerId).some((d) => d.state === "ambiguous" || d.state === "sending")) {
+      void this.breakWorker(workerId, "unknown", "Deferred input delivery is uncertain; inspect the session before continuing.", "delivery_ambiguous");
+      return;
+    }
+    if (this.store.getWorker(workerId)?.agent === "codex") return; // exact terminal evidence is required; never resume uncertain work
     if (this.store.countResumes(workerId, this.resumeWindowMs) >= this.maxAutoResumes) {
       void this.breakWorker(
         workerId,
@@ -1683,6 +1743,8 @@ export class WorkerManager {
     const worker = this.store.getWorker(workerId);
     if (!worker) throw new CommandError("not_found", `worker ${workerId} is unknown on this machine`);
     const adapter = this.adapterOfWorker(worker);
+    this.guardDelivery(worker);
+    if (this.stopRequested.delete(workerId)) throw new CommandError("aborted", "worker was stopped before resume");
     if (worker.state === "queued") {
       // §8.2: a queued write worker has no session yet — there is nothing to resume. It
       // starts on its own when the repo's serial slot frees.
@@ -1702,9 +1764,17 @@ export class WorkerManager {
     if (adapter.isRunning?.(workerId)) {
       const commandId = options.commandId;
       if (commandId) this.expectCommandMarker(commandId, workerId);
-      await adapter.resume(workerId, reason, commandId ? { commandId } : undefined);
+      this.store.setWorkerState(workerId, "recovering");
+      try {
+        await adapter.resume(workerId, reason, commandId ? { commandId } : undefined);
+        if (this.stopRequested.delete(workerId)) throw new CommandError("aborted", "worker was stopped during resume");
+      } catch (error) {
+        this.stopRequested.delete(workerId);
+        if (this.store.getWorker(workerId)?.state === "recovering") this.store.setWorkerState(workerId, worker.state);
+        throw error;
+      }
       this.recordSessionTail(workerId);
-      this.store.setWorkerState(workerId, "running");
+      if (this.store.getWorker(workerId)?.state === "recovering") this.store.setWorkerState(workerId, "running");
       await this.emitEvent(workerId, "resumed", { reason, count });
       return;
     }
@@ -1732,6 +1802,7 @@ export class WorkerManager {
     // must find `launching` set (review N2's invariant), including across the §10 pre-launch
     // check's awaits — otherwise it settles the worker while the relaunch still spawns.
     this.launching.add(workerId);
+    this.store.setWorkerState(workerId, "recovering");
     try {
       await this.checkSessionBeforeRelaunch(worker);
       if (this.stopRequested.has(workerId)) {
@@ -1742,6 +1813,7 @@ export class WorkerManager {
     } catch (err) {
       releaseLock(this.stateDir, workerId);
       this.launching.delete(workerId);
+      if (!this.stopRequested.delete(workerId)) this.store.setWorkerState(workerId, worker.state);
       throw err;
     }
     const spec: StartSpec = {
@@ -1770,7 +1842,7 @@ export class WorkerManager {
     try {
       let handle: WorkerHandle;
       try {
-        handle = await adapter.start(spec);
+        handle = await this.startAdapter(adapter, spec);
       } catch (err) {
         if (this.stopRequested.has(workerId)) throw new CommandError("aborted", "worker was stopped during resume");
         throw err;
@@ -1802,6 +1874,8 @@ export class WorkerManager {
         // The stop already settled this worker (idle + settled:aborted); leave its
         // bookkeeping untouched (review finding 3, same window on the resume path).
         this.stopRequested.delete(workerId);
+      } else if (this.store.getWorker(workerId)?.state === "recovering") {
+        this.store.setWorkerState(workerId, worker.state);
       }
       throw err;
     } finally {
@@ -1927,6 +2001,10 @@ export class WorkerManager {
     if (!cwd) throw new CommandError("startup_failed", `no worktree or repo path to respawn worker ${workerId} in`);
     const lock = acquireLock(this.stateDir, workerId); // released by the expected process_exit above
     if (!lock.ok) throw new CommandError("lock_held", `worker ${workerId} is locked by pid ${lock.pid}`, true);
+    if (worker.agent === "codex" || this.store.deferred(workerId).some((d) => d.state === "ambiguous" || d.state === "sending")) {
+      releaseLock(this.stateDir, workerId);
+      throw new CommandError("ambiguous", "Worker stalled with uncertain input; inspect the session instead of replaying work");
+    }
     const original = this.runPrompts.get(workerId) ?? RESUME_PROMPT;
     const spec: StartSpec = {
       workerId,
@@ -1947,7 +2025,7 @@ export class WorkerManager {
       base: worker.base ?? undefined,
     });
     try {
-      const handle = await this.adapterOfWorker(worker).start(spec);
+      const handle = await this.startAdapter(this.adapterOfWorker(worker), spec);
       // A stop is not a transition and can land while adapter.start is in flight: it settles
       // the worker (idle + settled:aborted) and its verdict must survive (the resume path
       // applies the same check). If this strike's `recovering` is gone the stop won the race
@@ -2093,6 +2171,7 @@ export class WorkerManager {
           // §9.2: auth never auto-resumes — the user must fix credentials on the machine, so
           // the connector is done with this worker; the settled event routes it to them.
           this.store.setWorkerState(event.workerId, "broken", "error:auth");
+          await this.flushDeferredSends(event.workerId, "broken");
         } else {
           this.store.setWorkerState(event.workerId, "idle", event.outcome);
           // §4.1: the process stays for the idle window (hot idle), then is reclaimed.
@@ -2141,10 +2220,103 @@ export class WorkerManager {
             code: event.code,
             signal: event.signal,
           });
-          this.scheduleAutoResume(event.workerId, "process_exit");
+          if (worker.agent === "codex") {
+            if (!await this.reconcileDeferred(worker)) await this.reconcileCodex(worker);
+            if (this.store.getWorker(worker.workerId)?.state === "broken") await this.flushDeferredSends(worker.workerId, "delivery_ambiguous");
+            await this.drainPendingSends(worker.workerId);
+            this.pumpQueuedWorkers();
+          } else this.scheduleAutoResume(event.workerId, "process_exit");
         }
         return;
       }
+    }
+  }
+
+  private guardDelivery(worker: WorkerRow): void {
+    if (this.store.deferred(worker.workerId).some((d) => d.state === "ambiguous")) {
+      throw new CommandError("ambiguous", "A deferred input has uncertain delivery; inspect the local session before continuing. Later FIFO inputs cannot pass it.");
+    }
+    if (worker.agent !== "codex") return;
+    if (worker.lastOutcome === "delivery_ambiguous" || this.store.deliveries(worker.workerId).some((d) => d.state === "sending") ||
+      this.store.deferred(worker.workerId).some((d) => d.state === "ambiguous")) {
+      throw new CommandError("ambiguous", "Codex input delivery is uncertain; inspect the local session before continuing. Automatic replay is disabled.");
+    }
+  }
+
+  private async startAdapter(adapter: AgentAdapter, spec: StartSpec): Promise<WorkerHandle> {
+    const onSession = spec.onSession;
+    // All adapters call this before work input. A stop during their async handshake
+    // must prevent a queued instruction from executing after it has been returned.
+    spec.onSession = (file, baseline, sessionId) => {
+      const checkStopped = () => {
+        if (this.stopRequested.has(spec.workerId)) throw new CommandError("aborted", "worker was stopped before input delivery");
+      };
+      checkStopped();
+      const persistence = onSession?.(file, baseline, sessionId);
+      if (persistence) return persistence.then(checkStopped);
+    };
+    const original = spec.onSession;
+    const worker = this.requireWorker(spec.workerId);
+    if (spec.model) this.store.setWorkerModel(spec.workerId, spec.model);
+    else if (worker.model) spec.model = worker.model;
+    if (adapter.kind === "codex") {
+      this.guardDelivery(worker);
+      // Worktree identity must survive a crash before start() returns.
+      const context = this.active.get(spec.workerId);
+      if (context?.worktree) this.store.setWorkerWorktree(spec.workerId, { worktree: context.worktree, branch: context.branch ?? null, base: context.base ?? null });
+      spec.onSession = async (file, baseline, sessionId) => {
+        if (!sessionId) throw new CommandError("protocol_error", "Codex thread id is required before work input");
+        this.store.setSessionIdentity(spec.workerId, sessionId, file);
+        await original?.(file, baseline, sessionId);
+      };
+      spec.onDelivery = (commandId, state, turnId) => {
+        if (state === "not_delivered") this.store.clearRejectedDelivery(commandId);
+        else this.store.recordDelivery(spec.workerId, commandId, state, turnId);
+      };
+      spec.onProcess = (ref) => this.store.setAgentProcess(spec.workerId, ref);
+    }
+    return adapter.start(spec);
+  }
+
+  private async reconcileDeferred(worker: WorkerRow): Promise<boolean> {
+    for (const send of this.store.deferred(worker.workerId)) {
+      if (send.state === "returning") {
+        await this.emitEvent(worker.workerId, "queue_returned", { texts: [send.text], reason: "connector_restart" });
+        this.store.setDeferredState(send.commandId, "returned");
+      } else if (send.state === "sending") {
+        const receipt = this.store.deliveries(worker.workerId).find((v) => v.commandId === send.commandId);
+        const delivery = worker.agent === "codex" ? receipt?.state === "delivered" ? "delivered" : "ambiguous"
+          : worker.agent === "pi" || !worker.agent ? inspectCommandDelivery(send.sessionFile, send.commandId, send.afterEntryId) : "ambiguous";
+        this.store.setDeferredState(send.commandId, delivery === "not_delivered" ? "queued" : delivery);
+      }
+    }
+    if (this.store.deferred(worker.workerId).some((d) => d.state === "ambiguous")) {
+      this.store.setWorkerState(worker.workerId, "broken", "delivery_ambiguous");
+      await this.emitEvent(worker.workerId, "settled", { outcome: "error", errorClass: "unknown", lastText: "Deferred input delivery is uncertain. Inspect the local session before retrying; FIFO successors will be returned." });
+      return true;
+    }
+    return false;
+  }
+
+  private async reconcileCodex(worker: WorkerRow): Promise<void> {
+    const file = worker.sessionId ? codexSessionPath(worker.sessionId, worker.sessionFile) : null;
+    if (file) this.store.setSessionIdentity(worker.workerId, worker.sessionId!, file);
+    const deliveries = this.store.deliveries(worker.workerId);
+    const receipt = deliveries.at(-1);
+    const uncertain = deliveries.some((d) => d.state !== "delivered") || this.store.deferred(worker.workerId).some((d) => d.state === "ambiguous");
+    const tail = uncertain ? { kind: "lost" as const } : inspectCodexTail(file, worker.sessionId, receipt?.turnId);
+    if (tail.kind === "settled") {
+      const git = worker.worktree && worker.base ? await collectGitFacts(worker.worktree, worker.base).catch(() => undefined) : undefined;
+      await this.emitEvent(worker.workerId, "report", { ...tail.report, ...(git ? { git } : {}) });
+      await this.emitEvent(worker.workerId, "settled", { outcome: "reported" });
+      this.store.setWorkerState(worker.workerId, "idle", "reported");
+    } else if (tail.kind === "aborted" || tail.kind === "unreported") {
+      await this.emitEvent(worker.workerId, "settled", { outcome: tail.kind });
+      this.store.setWorkerState(worker.workerId, "idle", tail.kind);
+    } else {
+      // Neither thread creation nor a local intent proves that the task was accepted or finished.
+      this.store.setWorkerState(worker.workerId, "broken", "delivery_ambiguous");
+      await this.emitEvent(worker.workerId, "settled", { outcome: "error", errorClass: "unknown", lastText: "Codex delivery/completion is uncertain. Inspect the local session; automatic replay is disabled." });
     }
   }
 
@@ -2153,7 +2325,7 @@ export class WorkerManager {
   private recordSessionTail(workerId: string): void {
     const worker = this.store.getWorker(workerId);
     if (!worker?.sessionFile) return;
-    const observation = observeSession(worker.sessionFile);
+    const observation = worker.agent === "codex" ? observeCodexSession(worker.sessionFile, worker.sessionId) : observeSession(worker.sessionFile);
     if (observation.lastEntryId) this.store.setSessionObservation(workerId, worker.sessionFile, observation.lastEntryId);
   }
 
@@ -2178,7 +2350,8 @@ export class WorkerManager {
     const file = sessionFile ?? worker?.sessionFile ?? null;
     // The tail id RIGHT NOW: recovery looks for the marker only after this entry, so a
     // marker from an earlier delivery of the same commandId (a redelivery) never counts.
-    const after = afterEntryId ?? (file ? observeSession(file).lastEntryId : worker?.lastKnownEntryId ?? null);
+    const after = afterEntryId ?? (file ? (worker?.agent === "codex" ? observeCodexSession(file, worker.sessionId) : observeSession(file)).lastEntryId : worker?.lastKnownEntryId ?? null);
+    this.store.armDeferred(commandId, file, after);
     this.onExpectMarker?.(commandId, { sessionFile: file, afterEntryId: after });
   }
 
@@ -2187,6 +2360,14 @@ export class WorkerManager {
    *  last entry the connector recorded. Runs under the worker's lock; the launch proceeds
    *  only when the session is free. */
   private async checkSessionBeforeRelaunch(worker: WorkerRow): Promise<void> {
+    if (worker.agent === "codex") {
+      const owned = this.store.getAgentProcess(worker.workerId);
+      if (owned && pidAlive(owned.pid) && (!owned.startTime || processStartTime(owned.pid) === owned.startTime)) throw new CommandError("session_in_use", "The previously recorded Codex process is still alive", true);
+      // Codex's local thread store atomically locks the exact thread during resume,
+      // before work input. Unrelated desktop/app-server processes are not holders.
+      // The adapter forces that store and translates its writer conflict below.
+      return;
+    }
     if (!worker.sessionFile) return;
     // Every agent's live pids (issue #17): the holders check is agent-agnostic.
     const live = [...this.adapters.values()].flatMap((a) => a.workerPids?.() ?? []).map((p) => p.pid);
