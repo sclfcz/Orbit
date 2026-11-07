@@ -39,6 +39,18 @@ describe.skipIf(process.env.ORBIT_CODEX_LIVE !== "1")("real Codex acceptance", (
       const h = await a.start(spec); expect(identity).toBe(h.sessionId);
       const settled = await waitFor(() => events.find((e) => e.type === "settled"), 60000, "real Codex report");
       expect(settled.outcome).toBe("reported"); expect(existsSync(join(repo, "orbit-smoke.txt"))).toBe(true);
+      // The original server still owns this idle thread. A second server must refuse
+      // thread/resume before input, even without a model turn currently running.
+      const contender = new CodexAdapter({ requestTimeoutMs: 20000 });
+      const competingInput: string[] = [];
+      try {
+        await expect(contender.start({ ...spec, workerId: "orbit-contender", resumeSessionId: h.sessionId,
+          onSession: () => { throw new Error("Native resume accepted a second writer"); },
+          onDelivery: (_, state) => { competingInput.push(state); },
+        })).rejects.toMatchObject({ code: "session_in_use", retriable: true });
+        expect(competingInput).toEqual([]);
+        expect(a.isRunning(spec.workerId)).toBe(true);
+      } finally { await contender.stopProcess("orbit-contender"); }
       await a.stopProcess(spec.workerId); events.length = 0;
       const resumed = await a.start({ ...spec, resumeSessionId: h.sessionId, commandId: "live-resume", prompt: "Do not change files. Report the contents of orbit-smoke.txt from our previous turn in answer." });
       expect(resumed.sessionId).toBe(h.sessionId);

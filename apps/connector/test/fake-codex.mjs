@@ -3,9 +3,10 @@ import { spawn } from 'node:child_process';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 const options = JSON.parse(process.env.FAKE_CODEX_OPTIONS || '{}');
-if (process.argv.includes('--version')) { console.log('codex-cli 0.166.0-alpha.6'); process.exit(0); }
+if (process.argv.includes('--version')) { console.log(process.argv.find(v => v.startsWith('--fake-version='))?.slice('--fake-version='.length) || 'codex-cli 0.166.0-alpha.6'); process.exit(0); }
 const dir = process.env.FAKE_CODEX_DIR;
 mkdirSync(dir, { recursive: true });
+writeFileSync(join(dir, 'args.json'), JSON.stringify(process.argv.slice(2)));
 const id = '019a0000-0000-7000-8000-000000000001';
 const path = join(dir, `rollout-${id}.jsonl`);
 const report = { status: 'done', summary: 'Codex fake complete', answer: '42', changes: [], decisions: [], leftovers: [], tests: null, question: null, next: null };
@@ -46,6 +47,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   else if (req.method === 'mcpServerStatus/list') reply({ data: [], nextCursor: null });
   else if (req.method === 'thread/read') reply({ thread: { id, turns: [{ id: `turn-${turn}`, status: 'completed', items: [{ type: 'agentMessage', phase: 'final_answer', text: JSON.stringify(report) }] }] } });
   else if (['thread/start', 'thread/resume'].includes(req.method)) {
+    if (req.method === 'thread/resume' && options.resumeError) { emit({ id: req.id, error: options.resumeError }); return; }
     if (req.method === 'thread/start') writeFileSync(path, JSON.stringify({ type: 'session_meta', payload: { id, cwd: process.cwd() } }) + '\n');
     else if (!readFileSync(path, 'utf8').includes(id)) throw Error('missing session');
     reply({ thread: { id, sessionId: 'different-session-tree-root', path: options.noPath ? null : path } });

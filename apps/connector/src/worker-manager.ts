@@ -7,7 +7,7 @@
 // watchdog (issue #13, ADR-0001): silent + cold-CPU workers get one in-place respawn, then
 // settle as error:stall.
 import type { AgentAdapter, Delivery, ErrorClass, RawAdapterEvent, StartSpec, WorkerHandle, WorkerMode } from "./agent.ts";
-import { PartialInterruptError } from "./agent.ts";
+import { AdapterError, PartialInterruptError } from "./agent.ts";
 import { classifyError } from "./adjudication.ts";
 import { killOrphans, listDescendants, type ProcRef } from "./descendants.ts";
 import { collectGitFacts } from "./git-facts.ts";
@@ -16,7 +16,7 @@ import { acquireLock, isLockHeld, markLocksHeldByDeadProcess, pidAlive, processS
 import { RESUME_PROMPT, PiAdapter } from "./pi-adapter.ts";
 import { externalActivity, inspectCommandDelivery, observeSession } from "./session-observation.ts";
 import { codexSessionPath, inspectCodexTail, observeCodexSession } from "./codex-session.ts";
-import { findSessionHolders, listProcessArguments } from "./session-holders.ts";
+import { findSessionHolders } from "./session-holders.ts";
 import { ProgressThrottle } from "./progress.ts";
 import { inspectSessionTail, type SessionTail } from "./session-tail.ts";
 import { readSessionHistory } from "./session-history.ts";
@@ -1231,7 +1231,7 @@ export class WorkerManager {
       }
       const code = (err as { code?: string }).code ?? "startup_failed";
       const message = err instanceof Error ? err.message : String(err);
-      throw new CommandError(code, `cold-start send failed: ${message}`);
+      throw new CommandError(code, `cold-start send failed: ${message}`, err instanceof AdapterError && err.retriable);
     } finally {
       this.launching.delete(workerId);
       this.stopRequested.delete(workerId);
@@ -2363,9 +2363,9 @@ export class WorkerManager {
     if (worker.agent === "codex") {
       const owned = this.store.getAgentProcess(worker.workerId);
       if (owned && pidAlive(owned.pid) && (!owned.startTime || processStartTime(owned.pid) === owned.startTime)) throw new CommandError("session_in_use", "The previously recorded Codex process is still alive", true);
-      const table = await listProcessArguments();
-      const ownPids = new Set([...this.adapters.values()].flatMap((a) => a.workerPids?.() ?? []).map((p) => p.pid));
-      if (table.processes.some((p) => !ownPids.has(p.pid) && /(?:^|[\s/])codex(?:[\s-]|$)/i.test(p.args))) throw new CommandError("session_in_use", "Another Codex process may hold this thread; app-server argv cannot prove it is free", true);
+      // Codex's local thread store atomically locks the exact thread during resume,
+      // before work input. Unrelated desktop/app-server processes are not holders.
+      // The adapter forces that store and translates its writer conflict below.
       return;
     }
     if (!worker.sessionFile) return;

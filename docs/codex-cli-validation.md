@@ -1,6 +1,6 @@
 # Codex CLI implementation validation — 2026-11-07
 
-Overall: **package regressions and the local browser workflow pass; real acceptance remains conditional**. Real-CLI evidence covers worktree writes, structured reports, steer, interruption with shell cleanup, local history, Connector restart, and uncertain-crash no-replay recovery. Successful manager-level cold continuation alongside unrelated Codex processes and a clean readonly model turn remain unverified.
+Overall: **package regressions, local browser workflow and cold continuation pass; readonly model acceptance remains conditional**. Real-CLI evidence covers worktree writes, structured reports, steer, interruption with shell cleanup, local history, Connector restart, and uncertain-crash no-replay recovery. Manager-level cold continuation succeeds while an unrelated real app-server remains alive; same-thread competing writers are refused before input. A clean readonly model turn remains unverified.
 
 This public record contains aggregate results and reproducible test names. Raw session records, machine identifiers, local paths, credentials and detailed process evidence remain local. The owner authorized committing and pushing verified source to a feature branch; deployment and merging main are outside this task.
 
@@ -8,18 +8,20 @@ This public record contains aggregate results and reproducible test names. Raw s
 
 | Check | Result |
 | --- | --- |
-| `pnpm --dir apps/connector test`, including build | **468 passed, 7 skipped**; 47 files passed, 3 skipped; 34.63 s |
-| `pnpm --dir apps/steward test` | **668 passed**, including 12 generated-auth tests |
-| `pnpm --dir packages/protocol test` | **61 passed** |
-| `pnpm --dir apps/preview-machine test` | **7 passed** |
-| Complete real adapter acceptance, `test/codex-live.test.ts` | **5 passed**, 60.26 s |
-| Real Connector restart/recovery, `test/codex-connector-live.test.ts` | **1 passed**, 47.94 s; cold continuation safely refused |
+| `pnpm --dir apps/connector test`, including build | **474 passed, 7 skipped**; 47 files passed, 3 skipped; 31.05 s |
+| `pnpm --dir apps/steward test` | **668 passed**, including 12 generated-auth tests; earlier unchanged-package run |
+| `pnpm --dir packages/protocol test` | **61 passed**; earlier unchanged-package run |
+| `pnpm --dir apps/preview-machine test` | **7 passed**; earlier unchanged-package run |
+| Complete real adapter acceptance before the cold-continuation amendment | **5 passed**, 60.26 s |
+| Strengthened real adapter writer-exclusion/release/continuation test | **1 passed**, 4 deselected; 27.43 s |
+| Real Connector restart/recovery, `test/codex-connector-live.test.ts` | **1 passed**, 65.31 s; same-thread cold continuation with an unrelated real app-server alive |
 | Rebuilt local browser dispatch, same-turn steer, interruption and history | Passed; no late shell write after its original deadline |
-| `pnpm typecheck` | All workspace packages passed after runtime fixes |
-| Connector typecheck after the final test-only update | Passed |
+| Rebuilt browser continuation of the interrupted session | Passed; same native thread, new structured report, history updated |
+| Focused cold-continuation and delivery regressions | **67 passed**, 6.36 s; Connector typecheck passed |
+| `pnpm typecheck` | All workspace packages passed after the cold-continuation fix |
 | `git diff --check` | Passed |
 
-Package suites were run separately, not relabelled as a recursive test run. They total **1,204 passing tests**, excluding opt-in real checks and overlapping focused runs. Steward/protocol/preview-machine ran earlier; their implementation did not change during the final Connector fault fixes. Live tests remain opt-in and are skipped in the default suite.
+Package suites were run separately, not relabelled as a recursive test run. Their latest recorded results total **1,210 passing tests**, excluding opt-in real checks and overlapping focused runs. Steward/protocol/preview-machine ran earlier; their implementation did not change during the Connector fixes. Live tests remain opt-in and are skipped in the default suite.
 
 Toolchain: Node 26.0.0, pinned pnpm 10.33.0, macOS, desktop-bundled `codex-cli 0.166.0-alpha.6` with the existing login. Only test-process PATH was adjusted. No global Codex configuration, authentication files or unrelated desktop processes were changed. This does not certify every supported release or a clean independent CLI installation.
 
@@ -35,7 +37,9 @@ The rebuilt application's final browser run used a new worker and a 90-second sh
 
 An earlier post-fix browser task finished naturally before the controls were exercised. It is not counted as cancellation evidence. The final run triggered browser actions from the observed shell start and waited beyond the original deadline.
 
-Local acceptance does not certify a deployed cloud environment. Post-interrupt continuation is cold and remains subject to occupancy checks. Interrupting local execution cannot undo external side effects.
+After the cold-continuation fix, the rebuilt foreground Connector reopened this paired local state. The browser sent a file-inspection follow-up to the previously interrupted worker. It returned a new structured report, retained the original native thread ID, and settled `idle / reported`. The page showed `Sent.` and `Up to date · 51 entries`, including the new report; the original start marker remained present and the cancelled shell's finish marker remained absent. A browser wait initially timed out because its chosen status label was no longer rendered; the subsequent snapshot showed completion, and the local lifecycle record confirmed it. This was a continuation, not a replacement worker.
+
+Local acceptance does not certify a deployed cloud environment. Post-interrupt continuation is cold and remains subject to exact-thread occupancy checks. Interrupting local execution cannot undo external side effects.
 
 ## Restart, history and uncertain delivery
 
@@ -43,11 +47,21 @@ The subprocess acceptance test uses actual separate Node ConnectorApp/LocalStore
 
 Three distinct Connector processes and boot IDs reopened the same store. A real Codex task wrote the expected bytes in its assigned worktree, reported done and left the original checkout unchanged. Thread identity, worktree and last event sequence survived restart.
 
-History was reconstructed solely through `history_chunk` / `history_ack`: **31 pages, 61 fragments, 36 split fragments**, with every offset/length checked and the reconstructed records equal to the original local file.
+History was reconstructed solely through `history_chunk` / `history_ack`: **30 pages, 59 fragments, 34 split fragments** in the latest run, with every offset/length checked and the reconstructed records equal to the original local file.
 
 For the uncertain-crash case, a second task reached a real shell marker. The test suspended only its identity-checked owned app-server, then killed the Connector. This prevents the CLI's normal stdin-EOF handler from recording an abort. Production startup reaped the orphan and classified the untouched real record as `unknown / delivery_ambiguous`. Receipts remained unchanged, the marker executed once, no finish file appeared, send/resume were rejected, and the original command ID was deduplicated. A real post-recovery heartbeat allowed time to observe erroneous replay. No rollout or receipt was edited.
 
-An earlier kill-only attempt produced a genuine aborted record and was not counted as unknown evidence. Cold continuation was actually attempted through the production manager but returned `session_in_use`: **persistence and safe refusal passed; successful continuation was not certified**. Adapter-level stop/resume with the same thread ID passed separately, without the manager's cross-process guard.
+An earlier kill-only attempt produced a genuine aborted record and was not counted as unknown evidence. The original acceptance run also returned `session_in_use` during cold continuation because the manager rejected any unrelated Codex process. That historical refusal was not counted as successful continuation and is superseded by the checks below.
+
+### Cold-continuation repair
+
+The manager retains recorded owner PID/start-time checks but no longer vetoes every Codex process. The owned app-server explicitly uses `experimental_thread_store.type="local"`. The native local store acquires an atomic per-thread writer lock during resume, before input. Only the exact requested thread's native conflict becomes retryable `session_in_use`; generic RPC errors retain their meaning. This retryability survives both cold-send wrapping and manual-resume WebSocket responses.
+
+- A real second app-server was refused while the original idle thread still had an owner, before session persistence or input delivery. After the original server stopped, the same thread resumed and reported successfully.
+- A real unrelated app-server remained alive while a restarted Connector cold-continued its own thread, read the previous turn's file, and returned a structured report. The native thread ID remained unchanged, exactly one new acceptance receipt appeared, and event sequences remained contiguous. The test now requires this success; safe refusal no longer passes this case.
+- Deterministic regressions cover unrelated-process coexistence, both send/resume conflict responses, no delivery on conflict, exact error matching and CLI version gating.
+
+The first native-lock live attempt stopped earlier with `workspace routing discovery timed out`; it did not reach contention and is not counted as locking evidence. A subsequent unchanged-account/configuration run passed. Native exclusion is scoped to compatible local-store writers sharing `CODEX_HOME`, not copied rollouts in different homes or older nonparticipating writers.
 
 ## Readonly boundary
 
@@ -74,7 +88,7 @@ The original implementation snapshot had 426 Connector passes, 11 stale-bin fail
 
 - Only `0.166.0-alpha.6` was live-tested. Discovery accepts the narrow 0.166/0.167 family; acceptance of a version is not certification of that release.
 - A clean independent CLI configuration is still needed to certify readonly model execution.
-- Any unowned Codex process can conservatively block cold continuation, including desktop-related processes. Its command line cannot prove which thread it owns. Successful manager-level cold continuation with desktop coexistence remains unverified.
+- Cold continuation and same-thread exclusion were verified with separate real app-servers using the existing home. This does not certify every desktop storage mode; native exclusion requires compatible local-store writers sharing `CODEX_HOME`.
 - Images remain unsupported, and monetary cost is not inferred from token usage.
 - No deployed cloud environment was tested.
 

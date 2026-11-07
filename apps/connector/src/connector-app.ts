@@ -14,7 +14,7 @@ import { EventLog } from "./events.ts";
 import type { LocalStore } from "./store.ts";
 import type { StallWatchdogOptions } from "./watchdog.ts";
 import { CommandError, WorkerManager, type RecoveryOptions } from "./worker-manager.ts";
-import type { AgentAdapter } from "./agent.ts";
+import { AdapterError, type AgentAdapter } from "./agent.ts";
 import { PiAdapter } from "./pi-adapter.ts";
 import { ClaudeAdapter, detectClaude } from "./claude-adapter.ts";
 import { CodexAdapter, detectCodex } from "./codex-adapter.ts";
@@ -169,7 +169,7 @@ export class ConnectorApp {
       this.log?.("command_settled", { cmdId: cmd.id, kind: cmd.kind, ok: true });
       return { ok: true, data };
     } catch (err) {
-      if (err instanceof CommandError) {
+      if (err instanceof CommandError || err instanceof AdapterError) {
         this.log?.("command_settled", { cmdId: cmd.id, kind: cmd.kind, ok: false, code: err.code });
         return { ok: false, error: { code: err.code, message: err.message, retriable: err.retriable } };
       }

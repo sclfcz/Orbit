@@ -2,6 +2,8 @@
 // drives the WorkerManager + fake-pi, and the started → progress → report(+git) → settled
 // events come back on the same socket — issue #3's acceptance path over #30's transport.
 import { rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConnectorApp } from "../src/connector-app.ts";
@@ -61,6 +63,48 @@ describe("start_worker over the real transport (issue #3 + #30)", () => {
     const result = mock.events().filter((e) => e.type === "report")[0]!;
     expect(result).toMatchObject({ answer: "42", status: "done" });
   }, 30000);
+  it.each(["send", "resume"])("returns a retryable native Codex conflict over WS for cold %s without input", async (kind) => {
+    const adapter = new CodexAdapter({ command: [process.execPath, join(import.meta.dirname, "fake-codex.mjs")],
+      env: { FAKE_CODEX_DIR: dir, FAKE_CODEX_OPTIONS: JSON.stringify({ resumeError: {
+        code: -32600, message: "thread 019a0000-0000-7000-8000-000000000001 already has an active writer",
+      } }) } });
+    app = new ConnectorApp({ store, stateDir, adapters: [adapter] });
+    await app.start(); await mock.waitHello();
+    const start = mock.sendCmd("start_worker", { workerId: "w-e2e-1", threadId: "codex-conflict", repoId: repo, mode: "write", agent: "codex", prompt: "task" });
+    expect(await waitFor(() => mock.resultsFor(start))).toMatchObject({ ok: true });
+    await waitFor(() => store.getWorker("w-e2e-1")?.state === "idle");
+    await app.manager.stopProcess("w-e2e-1");
+    const before = store.getWorker("w-e2e-1")!;
+    const receipts = store.deliveries("w-e2e-1");
+    const cmd = mock.sendCmd(kind, { workerId: "w-e2e-1", text: "must not execute", intent: "auto" });
+    expect(await waitFor(() => mock.resultsFor(cmd))).toMatchObject({ ok: false, error: { code: "session_in_use", retriable: true } });
+    expect(store.deliveries("w-e2e-1")).toEqual(receipts);
+    expect(store.getWorker("w-e2e-1")).toMatchObject({ state: "idle", sessionId: before.sessionId, worktree: before.worktree });
+    expect(adapter.workerPids()).toEqual([]);
+  });
+
+  it("cold-continues its own Codex thread while an unrelated Codex process stays alive", async () => {
+    const unrelated = spawn(process.execPath, ["-e", "process.title='codex'; process.send('ready'); setInterval(()=>{},1000)"], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+    try {
+      await once(unrelated, "message");
+      const adapter = new CodexAdapter({ command: [process.execPath, join(import.meta.dirname, "fake-codex.mjs")], env: { FAKE_CODEX_DIR: dir } });
+      app = new ConnectorApp({ store, stateDir, adapters: [adapter] });
+      await app.start(); await mock.waitHello();
+      const start = mock.sendCmd("start_worker", { workerId: "w-e2e-1", threadId: "codex-coexist", repoId: repo, mode: "write", agent: "codex", prompt: "task" });
+      expect(await waitFor(() => mock.resultsFor(start))).toMatchObject({ ok: true });
+      await waitFor(() => store.getWorker("w-e2e-1")?.state === "idle");
+      await app.manager.stopProcess("w-e2e-1");
+      const identity = store.getWorker("w-e2e-1")!.sessionId;
+      const send = mock.sendCmd("send", { workerId: "w-e2e-1", text: "continue", intent: "auto" });
+      expect(await waitFor(() => mock.resultsFor(send))).toMatchObject({ ok: true, data: { relaunched: true } });
+      expect(store.getWorker("w-e2e-1")?.sessionId).toBe(identity);
+      expect(store.deliveries("w-e2e-1")).toHaveLength(2);
+      expect(unrelated.exitCode).toBeNull(); expect(unrelated.signalCode).toBeNull();
+    } finally {
+      const exited = once(unrelated, "exit"); unrelated.kill("SIGTERM"); await exited;
+    }
+  });
+
   it("drives a write task end to end: cmd → worktree → fake-pi → events on the socket", async () => {
     const scenario = writeScenario(dir, "scenario", [
       reportRun(

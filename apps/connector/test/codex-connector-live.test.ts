@@ -8,6 +8,8 @@ import { describe, expect, it } from "vitest";
 import { LocalStore } from "../src/store.ts";
 import { EventLog } from "../src/events.ts";
 import { codexSessionPath } from "../src/codex-session.ts";
+import { CodexTransport } from "../src/codex-transport.ts";
+import { childEnv } from "../src/pi-adapter.ts";
 import { killOrphans, listDescendants, type ProcRef } from "../src/descendants.ts";
 import { processStartTime } from "../src/locks.ts";
 import { makeGitRepo, tmpDir, waitFor } from "./helpers.ts";
@@ -73,6 +75,7 @@ describe.skipIf(process.env.ORBIT_CODEX_LIVE !== "1")("real Codex full Connector
     const repo = await makeGitRepo(dir);
     const mock = startMockSteward();
     const children: ChildProcess[] = [];
+    let companion: CodexTransport | undefined;
     const owned: ProcRef[] = [];
     const evidence: Frame = { directory: dir, boots: [], checks: {}, coldContinuation: "not_attempted", result: "running" };
     const evidencePath = join(dir, "evidence.json");
@@ -167,25 +170,25 @@ describe.skipIf(process.env.ORBIT_CODEX_LIVE !== "1")("real Codex full Connector
       expect(history.lines.some((line) => line.includes("orbit-connector-restart"))).toBe(true);
       record("historyOverWebSocket", { pages: history.pages, fragments: history.fragments, splitFragments: history.splitFragments, exactLocalRecordMatch: true });
 
+      // Keep an unrelated real app-server alive throughout cold continuation. It uses
+      // the existing home/login but receives no thread or task input.
+      companion = new CodexTransport([process.env.ORBIT_CODEX_COMMAND || "codex", "app-server", "--listen", "stdio://"],
+        repo, childEnv(), () => {}, () => {}, 20_000);
+      await companion.request("initialize", { clientInfo: { name: "orbit_coexistence_acceptance", version: "1" } });
+      companion.write({ method: "initialized", params: {} });
       const receiptsBefore = inspect((s) => s.deliveries(workerId));
       const follow = await command(mock, "send", { workerId, intent: "auto", text: "Read orbit-restart.txt from our previous turn. Do not change files or use external tools. Report done and put its exact contents in answer." });
-      if (follow.ok) {
-        await waitFor(() => eventsFor(workerId).find((e) => e.type === "settled" && e.seq > seqBefore), 90_000, "cold continuation settlement");
-        expect(eventsFor(workerId).find((e) => e.type === "settled" && e.seq > seqBefore)).toMatchObject({ outcome: "reported" });
-        expect(eventsFor(workerId).find((e) => e.type === "report" && e.seq > seqBefore)?.answer).toContain("orbit-connector-restart");
-        expect(inspect((s) => s.getWorker(workerId)?.sessionId)).toBe(saved.sessionId);
-        expect(inspect((s) => s.deliveries(workerId))).toHaveLength(receiptsBefore.length + 1);
-        const newSeqs = eventsFor(workerId).filter((e) => e.seq > seqBefore).map((e) => e.seq);
-        expect(newSeqs).toEqual(newSeqs.map((_, i) => seqBefore + i + 1));
-        evidence.coldContinuation = "passed_same_session";
-      } else {
-        expect(follow).toMatchObject({ ok: false, error: { code: "session_in_use", retriable: true } });
-        expect(inspect((s) => s.deliveries(workerId))).toEqual(receiptsBefore);
-        expect(inspect((s) => s.getWorker(workerId)?.sessionId)).toBe(saved.sessionId);
-        expect(eventsFor(workerId).filter((e) => e.seq > seqBefore && ["started", "resumed", "report"].includes(e.type))).toEqual([]);
-        evidence.coldContinuation = "refused_session_in_use_continuation_not_verified";
-      }
-      record("coldContinuation", { outcome: evidence.coldContinuation, commandResult: follow });
+      expect(follow, JSON.stringify(follow)).toMatchObject({ ok: true });
+      await waitFor(() => eventsFor(workerId).find((e) => e.type === "settled" && e.seq > seqBefore), 90_000, "cold continuation settlement");
+      expect(eventsFor(workerId).find((e) => e.type === "settled" && e.seq > seqBefore)).toMatchObject({ outcome: "reported" });
+      expect(eventsFor(workerId).find((e) => e.type === "report" && e.seq > seqBefore)?.answer).toContain("orbit-connector-restart");
+      expect(inspect((s) => s.getWorker(workerId)?.sessionId)).toBe(saved.sessionId);
+      expect(inspect((s) => s.deliveries(workerId))).toHaveLength(receiptsBefore.length + 1);
+      const newSeqs = eventsFor(workerId).filter((e) => e.seq > seqBefore).map((e) => e.seq);
+      expect(newSeqs).toEqual(newSeqs.map((_, i) => seqBefore + i + 1));
+      expect(companion.child.exitCode).toBeNull(); expect(companion.child.signalCode).toBeNull();
+      evidence.coldContinuation = "passed_same_session_with_unrelated_app_server";
+      record("coldContinuation", { outcome: evidence.coldContinuation, unrelatedAppServerAlive: true, commandResult: follow });
 
       const crashId = "live-interrupted";
       const crashCommandId = "live-hard-crash-start";
@@ -245,6 +248,13 @@ describe.skipIf(process.env.ORBIT_CODEX_LIVE !== "1")("real Codex full Connector
       evidence.error = error instanceof Error ? error.stack : String(error);
       throw error;
     } finally {
+      if (companion && !exited(companion.child)) {
+        companion.child.kill("SIGTERM");
+        await waitFor(() => exited(companion!.child), 5000, "unrelated test server exit").catch(async () => {
+          companion!.child.kill("SIGKILL");
+          await waitFor(() => exited(companion!.child), 5000, "unrelated test server killed");
+        });
+      }
       if (observer) await remember().catch(() => undefined);
       for (const child of children) {
         if (!exited(child)) await stop(child, "SIGTERM").catch(() => stop(child, "SIGKILL"));

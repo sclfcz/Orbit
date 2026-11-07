@@ -104,6 +104,25 @@ describe("Codex app-server", () => {
     const req = t.requests().find((r) => r.method === "thread/resume");
     expect(req.params.threadId).toBe(h.sessionId); expect(req.params).not.toHaveProperty("model"); expect(req.params).not.toHaveProperty("path");
   });
+  it.each([
+    { rpcCode: -32600, thread: "019a0000-0000-7000-8000-000000000001", code: "session_in_use", retriable: true },
+    { rpcCode: -32600, thread: "different-thread", code: "codex_rpc", retriable: false },
+    { rpcCode: -32000, thread: "019a0000-0000-7000-8000-000000000001", code: "codex_rpc", retriable: false },
+  ])("classifies only the exact native writer conflict ($rpcCode / $thread)", async ({ rpcCode, thread, code, retriable }) => {
+    const t = setup({ resumeError: { code: rpcCode, message: `thread ${thread} already has an active writer` } });
+    const h = await t.adapter.start(t.spec);
+    await waitFor(() => t.events.find((e) => e.type === "settled"));
+    await t.adapter.stopProcess(t.spec.workerId);
+    const receipts: string[] = [];
+    await expect(t.adapter.start({ ...t.spec, resumeSessionId: h.sessionId,
+      onSession: () => { throw new Error("Conflict must precede persistence/input"); },
+      onDelivery: (_, state) => { receipts.push(state); },
+    })).rejects.toMatchObject({ code, retriable });
+    expect(receipts).toEqual([]);
+    expect(t.requests().filter((r) => r.method === "turn/start")).toHaveLength(1);
+    expect(t.adapter.isRunning(t.spec.workerId)).toBe(false);
+    expect(JSON.parse(readFileSync(join(t.dir, "args.json"), "utf8"))).toContain('experimental_thread_store.type="local"');
+  });
   it("refuses missing authentication before sending work", async () => {
     const t = setup({ noAuth: true }); await expect(t.adapter.start(t.spec)).rejects.toMatchObject({ code: "auth" });
     expect(t.requests().some((r) => r.method === "turn/start")).toBe(false);
@@ -168,5 +187,11 @@ describe("Codex app-server", () => {
   it("detects only supported CLI metadata and missing commands", () => {
     const t = setup(); expect(detectCodex(t.command).installed).toBe(true);
     expect(detectCodex([join(t.dir, "missing")]).installed).toBe(false);
+    for (const version of ["0.165.0", "0.166.0-alpha.5", "0.168.0", "0.166.0-beta.1"]) {
+      expect(detectCodex([...t.command, `--fake-version=codex-cli ${version}`]).installed).toBe(false);
+    }
+    for (const version of ["0.166.0-alpha.6", "0.166.0", "0.167.0"]) {
+      expect(detectCodex([...t.command, `--fake-version=codex-cli ${version}`]).installed).toBe(true);
+    }
   });
 });
