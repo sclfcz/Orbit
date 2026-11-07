@@ -53,7 +53,7 @@ owner 能在一条命令里看到：Connector 后台服务能不能找到 `codex
 - `apps/connector/src/cli.ts`：`doctorCommand()`，以及需要时的 `statusCommand`。
 - `apps/connector/src/service.ts`：如需从已安装的 unit/plist 读取服务的 PATH，在这里加只读方法。
 - `apps/connector/src/codex-adapter.ts`：只复用 `detectCodex()`，需要时给它加一个可选的 env/PATH 参数。不改版本门槛和其他行为。
-- 测试：`apps/connector/test/` 下现有的 cli/doctor 测试文件，以及 `codex-adapter.test.ts`。
+- 测试：`apps/connector/test/` 下覆盖 CLI 的 `bin.test.ts`、`service.test.ts`、`proxy.test.ts`（doctor 目前在这里有覆盖，先确认），以及 `codex-adapter.test.ts`。
 - 文档：`docs/codex-cli.md` 的 Local setup 段，`apps/connector/README.md` 中英两段（如有 doctor 输出示例）。
 
 ### 步骤
