@@ -12,7 +12,7 @@ import { VERSION } from "../src/version.ts";
 import { LocalStore } from "../src/store.ts";
 
 const exec = promisify(execFile);
-const bin = join(import.meta.dirname, "..", "bin", "sig.js");
+const bin = join(import.meta.dirname, "..", "bin", "orbit.js");
 
 let home: string;
 let stateDir: string;

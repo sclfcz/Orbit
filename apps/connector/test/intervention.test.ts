@@ -252,7 +252,7 @@ describe("send: the §6.2 state table", () => {
     expect(steers.map((e) => e.text)).toEqual(["改用 pnpm，不要 npm", "顺便看下 lock 文件"]);
   }, 30_000);
 
-  it("running + intent=after → follow_up", async () => {
+  it("running + intent=after → durable queue", async () => {
     setup([longRun(6)]);
     await startWorker1();
     await waitFor(() => events.some((e) => e.type === "progress"), 5000, "run started");
@@ -262,8 +262,9 @@ describe("send: the §6.2 state table", () => {
       text: "跑完后再补几个测试",
       intent: "after",
     })) as { delivery: string; effect?: string };
-    expect(result).toEqual({ delivery: "follow_up" });
-    expect(readPiLog(piLog).find((e) => e.type === "follow_up")).toMatchObject({ text: "跑完后再补几个测试" });
+    expect(result).toEqual({ delivery: "queued", effect: "after_run_end" });
+    expect(readPiLog(piLog).find((e) => e.type === "follow_up")).toBeUndefined();
+    expect(store.deferred("w-interv-1")).toContainEqual(expect.objectContaining({ text: "跑完后再补几个测试", state: "queued" }));
   }, 30_000);
 
   it("idle(hot) → prompt starts the next run in the same session; a started event flips the DO-side state", async () => {

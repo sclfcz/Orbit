@@ -17,6 +17,7 @@ import { CommandError, WorkerManager, type RecoveryOptions } from "./worker-mana
 import type { AgentAdapter } from "./agent.ts";
 import { PiAdapter } from "./pi-adapter.ts";
 import { ClaudeAdapter, detectClaude } from "./claude-adapter.ts";
+import { CodexAdapter, detectCodex } from "./codex-adapter.ts";
 import { VERSION } from "./version.ts";
 import type { PrExec } from "./pr.ts";
 
@@ -35,6 +36,7 @@ export interface ConnectorAppOptions {
   /** The claude argv prefix for the default adapter set (issue #17); tests point it at
    *  fake-claude. Ignored when `adapters`/`adapter` is given. */
   claudeCommand?: string[];
+  codexCommand?: string[];
   /** §9 recovery knobs (tests shrink timers and inject process I/O). */
   recovery?: RecoveryOptions;
   /** Stall-watchdog knobs (tests shrink timers and inject CPU samples). */
@@ -55,12 +57,15 @@ export function maxWorkersFromMemory(): number {
 
 /** Issue #17: the connector's default agent set — pi always, Claude Code when the binary is
  *  on the machine (hello.agents advertises only what is actually installed). */
-export function defaultAdapters(stateDir: string, claudeCommand: string[] = ["claude"]): AgentAdapter[] {
+export function defaultAdapters(stateDir: string, claudeCommand: string[] = ["claude"], codexCommand: string[] = ["codex"], log?: ConnectorAppOptions["log"]): AgentAdapter[] {
   const adapters: AgentAdapter[] = [new PiAdapter({ stateDir })];
   const claude = detectClaude(claudeCommand);
   if (claude.installed) {
     adapters.push(new ClaudeAdapter({ stateDir, command: claudeCommand, version: claude.version }));
   }
+  const codex = detectCodex(codexCommand);
+  if (codex.installed) adapters.push(new CodexAdapter({ command: codexCommand, version: codex.version }));
+  else log?.("codex_unavailable", { diagnostic: codex.diagnostic });
   return adapters;
 }
 
@@ -76,7 +81,7 @@ export class ConnectorApp {
     this.log = options.log;
     const events = new EventLog(options.store.database);
     this.commandLog = new CommandLog(options.store.database);
-    const adapters = options.adapters ?? (options.adapter ? [options.adapter] : defaultAdapters(options.stateDir, options.claudeCommand));
+    const adapters = options.adapters ?? (options.adapter ? [options.adapter] : defaultAdapters(options.stateDir, options.claudeCommand, options.codexCommand, options.log));
     this.manager = new WorkerManager({
       store: options.store,
       stateDir: options.stateDir,

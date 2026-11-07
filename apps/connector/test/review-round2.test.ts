@@ -53,6 +53,7 @@ class ScriptedAdapter implements AgentAdapter {
     reject: (err: Error) => void;
   }> = [];
   readonly startSpecs: StartSpec[] = [];
+  readonly sentTexts: string[] = [];
   /** Thrown by every send() — models a dead process (code not_running) or any RPC failure. */
   sendError?: Error;
   /** Texts the next interrupt's clear_queue hands back. */
@@ -69,6 +70,7 @@ class ScriptedAdapter implements AgentAdapter {
   }
   async send(_id: string, _input: { text: string }, _how: Delivery): Promise<{ effect?: string }> {
     if (this.sendError) throw this.sendError;
+    this.sentTexts.push(_input.text);
     return {};
   }
   async interrupt(_id: string): Promise<InterruptResult> {
@@ -150,9 +152,9 @@ describe("review round 2 regressions (R2-1..R2-3)", () => {
     const resumeCmd = manager.handleCommand("cmd-resume-1", "resume", { workerId: "w-r2", reason: "test" });
     await waitFor(() => (adapter.pendingStarts.length === 1 ? true : undefined), 2000, "resume start pending");
 
-    // T2: a send racing it on the idle-cold row. The old code registered T2 by overwriting
-    // T1, T2 lost the lock loudly (lock_held), and its settle deleted the still-running
-    // T1's entry — an interrupt in that window found nothing to wait and raced the boot.
+    // The resume now claims recovering before input. A racing send parks behind it,
+    // and interrupt supersedes that unsent input while still waiting for the live boot.
+    expect(store.getWorker("w-r2")?.state).toBe("recovering");
     const sendCmd = manager.handleCommand("cmd-send-1", "send", { workerId: "w-r2", text: "竞态指令", intent: "auto" });
     sendCmd.catch(() => {}); // rejects below; silences the pre-assertion window
 
@@ -163,12 +165,14 @@ describe("review round 2 regressions (R2-1..R2-3)", () => {
     ]);
     expect(early).toBe("still-waiting"); // the interrupt is held by the live transition
 
-    // T1 lands; T2 then runs chained and loses the lock loudly (T1's boot holds it) —
-    // exactly the backstop the review walked, now without breaking the map invariant.
+    // The boot completes before interrupt is released. The superseded send must never
+    // start another process, and must not erase the live transition being awaited.
     adapter.running.add("w-r2");
     resolveStart(adapter);
     await expect(resumeCmd).resolves.toMatchObject({ resumed: true });
-    await expect(sendCmd).rejects.toMatchObject({ code: "lock_held" });
+    await expect(sendCmd).rejects.toMatchObject({ code: "superseded" });
+    expect(adapter.startSpecs).toHaveLength(1);
+    expect(adapter.sentTexts).toEqual([]);
     await expect(interruptCmd).resolves.toMatchObject({ aborted: true, queueReturned: 0 });
   }, 15_000);
 

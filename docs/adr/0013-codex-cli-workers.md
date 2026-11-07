@@ -1,0 +1,23 @@
+# ADR-0013: Codex CLI worker sessions
+
+Status: accepted (2026-11-06). Amends ADR-0001 decision 3 ("Codex stays out"). Local session ownership follows ADR-0005 and session-view controls follow ADR-0011.
+
+## Decision
+
+Codex is an explicitly selected worker agent, driven by one owned `codex app-server --listen stdio://` process per worker. It uses the existing Connector scheduler, worktrees, repository locks, event log and execution slots. Default selection and the Steward model/prompt/tools do not change. There is no desktop integration or import of independently created threads.
+
+The worker's `sessionId` is Codex `thread.id`, never the session-tree root `thread.sessionId`. Save identity, nullable rollout path, model, directory and process identity before sending work. Input has a durable write-ahead intent followed by a separate acceptance receipt. Neither thread creation nor a local intent is server acceptance. A missing receipt after sending is ambiguous, not permission to retry. Do not use a resume prompt or a stall retry to bypass this rule.
+
+Codex recovery requires a terminal rollout event for the accepted turn. A completed structured report may be settled retroactively; interrupted and unreported turns retain those outcomes. Incomplete, unavailable, malformed or uncorrelated records require inspection. Recovery does not replay uncertain input. Native conflict responses and recorded process identities are authoritative positive occupancy evidence; because app-server argv does not identify threads, an unowned Codex process conservatively blocks cold continuation.
+
+All `after` messages, including Pi's, live in one Connector SQLite FIFO. A queued response is returned only after persistence. Sending, accepted, ambiguous, returning and returned states survive restart. An ambiguous head blocks later delivery. Known unsent messages are returned on interruption, stop or a broken worker; return notifications can repeat after a crash, but messages cannot silently disappear. No adapter maintains another after queue.
+
+Use explicit `readOnly` or `workspaceWrite` turn sandbox policy and `approvalPolicy: never` on both creation and continuation. Only the assigned directory is an extra writable root; temporary roots and network access are disabled. Inherited external tools/hooks prevent a verifiable readonly promise and are refused. Unexpected server requests are denied and the turn interrupted; no invisible approval or permission escalation is allowed. Global CLI configuration and credentials are not rewritten or copied.
+
+Reports are final structured output constrained by `outputSchema` and locally validated against the Orbit report contract. RPC acceptance, process exit, commentary and arbitrary last text are not task completion. Cancellation requires terminal turn status, not interrupt RPC success. Because native unified-exec shell jobs can outlive `turn/interrupt`, interrupted settlement is emitted only after retiring the owned app-server and cleaning up its identity-checked descendants; subsequent continuation is cold and retains the occupancy checks above. This does not cancel remote side effects of external integrations. Cost remains unknown when not supplied.
+
+Local history is read only for a registered worker, with a `session_meta.payload.id` identity check before serving its rollout. Reuse the bounded JSONL fragment/cursor relay. Original records remain local; unknown records remain inspectable. Session-view authentication and send/interrupt routes are unchanged.
+
+## Validation boundary
+
+Generated local protocol examined: `codex-cli 0.166.0-alpha.6`. Discovery currently accepts only the 0.166/0.167 protocol family and diagnoses other versions; this is a narrow implementation boundary, not a claim that every release in those families has passed live acceptance. See [Codex support](../codex-cli.md) for verification and remaining live gates.

@@ -329,11 +329,11 @@ describe("detectClaude / defaultAdapters (hello.agents advertises only what is i
     expect(found).toMatchObject({ installed: true, version: "1.0.42 (Claude Code)" });
     expect(detectClaude([process.execPath, join(dir, "no-such-bin.mjs")]).installed).toBe(false);
 
-    const adapters = defaultAdapters(stateDir, [process.execPath, fakeBin]);
+    const adapters = defaultAdapters(stateDir, [process.execPath, fakeBin], [join(dir, "no-codex")]);
     expect(adapters.map((a) => a.kind)).toEqual(["pi", "claude-code"]);
     expect(adapters[1]!.version).toBe("1.0.42 (Claude Code)");
     // Not installed → hello.agents carries pi only.
-    expect(defaultAdapters(stateDir, [process.execPath, join(dir, "no-such-bin.mjs")]).map((a) => a.kind)).toEqual([
+    expect(defaultAdapters(stateDir, [process.execPath, join(dir, "no-such-bin.mjs")], [join(dir, "no-codex")]).map((a) => a.kind)).toEqual([
       "pi",
     ]);
   });

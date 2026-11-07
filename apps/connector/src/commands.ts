@@ -98,7 +98,16 @@ export class CommandLog {
       }>;
     return rows.map((row) => {
       let recovery: "delivered" | "not_delivered" | "ambiguous" = "ambiguous";
-      if (row.state === "accepted") {
+      const queued = this.db.prepare("SELECT state FROM deferred_send WHERE commandId = ?").get(row.cmdId) as { state: string } | undefined;
+      const worker = row.workerId ? this.db.prepare("SELECT agent FROM worker WHERE workerId = ?").get(row.workerId) as { agent: string } | undefined : undefined;
+      const receipt = this.db.prepare("SELECT state FROM agent_delivery WHERE commandId = ?").get(row.cmdId) as { state: string } | undefined;
+      if (queued) {
+        // Acceptance into the durable queue survives even if the queued cmd_result was lost.
+        recovery = "delivered";
+      } else if (worker?.agent === "codex" && row.kind !== null && WRITE_AHEAD_KINDS.has(row.kind)) {
+        // Codex has no Pi marker. A persisted RPC receipt is acceptance evidence; an intent is not.
+        recovery = receipt?.state === "delivered" ? "delivered" : receipt ? "ambiguous" : "not_delivered";
+      } else if (row.state === "accepted") {
         // The handler never started: nothing was sent to the agent.
         recovery = "not_delivered";
       } else if (row.markerExpected === 1) {
@@ -109,7 +118,8 @@ export class CommandLog {
         recovery = "not_delivered";
       }
       const result: CommandResult | null =
-        recovery === "delivered"
+        queued ? { ok: true, data: { delivery: "queued", effect: "after_run_end", queueState: queued.state, recovered: "durable_queue_acceptance" } }
+        : recovery === "delivered"
           ? { ok: true, data: { recovered: "delivered_after_connector_restart" } }
           : recovery === "not_delivered"
             ? { ok: false, error: { code: "not_delivered", message: "connector restarted before the command reached the agent", retriable: true } }

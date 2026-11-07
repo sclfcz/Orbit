@@ -248,11 +248,15 @@ export class ClaudeAdapter implements AgentAdapter {
     };
     this.runtimes.set(spec.workerId, runtime);
     this.lastSpecs.set(spec.workerId, spec);
-    proc.spawn();
-    // The stdin prompt is only processed on EOF (spike): write it, then END stdin.
-    proc.writePrompt(spec.prompt);
 
     try {
+      // Register cancellation before awaiting persistence, then spawn and write stdin
+      // without another await: a stop during the hook must never submit this prompt.
+      await spec.onSession?.(null, null, sessionId);
+      if (runtime.stopping) throw new AdapterError("aborted", "Claude was stopped before input delivery");
+      proc.spawn();
+      // The stdin prompt is only processed on EOF (spike): write it, then END stdin.
+      proc.writePrompt(spec.prompt);
       // §4.4 step 4 analog: system/init must arrive within the window, echo our session id,
       // and show the Orbit MCP server connected (§15 item 1's startup self-check).
       const init = await proc.waitForInit(this.options.initTimeoutMs ?? 30_000);

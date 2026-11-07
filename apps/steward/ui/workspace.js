@@ -283,7 +283,7 @@ function renderFeed(stick) {
 
 // ---- the main pane: the conversation, or one worker's recorded session --------------------------------------
 
-const agentName = (agent) => ({ pi: 'pi', 'claude-code': 'Claude Code' }[agent] ?? agent);
+const agentName = (agent) => ({ pi: 'pi', 'claude-code': 'Claude Code', codex: 'Codex' }[agent] ?? agent);
 
 function urlFor(threadId, workerId) {
   return threadId ? `/app/threads/${threadId}${workerId ? `/workers/${workerId}` : ''}` : '/app';

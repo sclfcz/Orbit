@@ -89,6 +89,15 @@ export class LocalStore {
     )`);
     // Issue #17: which AgentAdapter owns the worker — set at start, immutable afterwards.
     this.addColumnIfMissing("worker", "agent", "TEXT NOT NULL DEFAULT 'pi'");
+    this.addColumnIfMissing("worker", "model", "TEXT");
+    this.db.exec(`CREATE TABLE IF NOT EXISTS agent_delivery (
+      commandId TEXT PRIMARY KEY, workerId TEXT NOT NULL, state TEXT NOT NULL, turnId TEXT, updatedAt INTEGER NOT NULL
+    )`);
+    this.db.exec(`CREATE TABLE IF NOT EXISTS deferred_send (
+      position INTEGER PRIMARY KEY AUTOINCREMENT, commandId TEXT UNIQUE NOT NULL, workerId TEXT NOT NULL,
+      input TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'queued', sessionFile TEXT, afterEntryId TEXT
+    )`);
+    this.db.exec(`CREATE TABLE IF NOT EXISTS agent_process (workerId TEXT PRIMARY KEY, ref TEXT NOT NULL)`);
     // The worktree base (§8.2) persisted so a restarted connector can still collect git
     // facts for a retroactive report (§9.1) — spikes kept it only in memory.
     this.addColumnIfMissing("worker", "base", "TEXT");
@@ -335,7 +344,7 @@ export class LocalStore {
     return (
       (this.db
         .prepare(
-          `SELECT workerId, threadId, repoId, mode, state, sessionId, sessionFile, lastKnownEntryId, branch, worktree, base, worktreeCleanedAt, agent, lastOutcome, createdAt, updatedAt
+          `SELECT workerId, threadId, repoId, mode, state, sessionId, sessionFile, lastKnownEntryId, branch, worktree, base, worktreeCleanedAt, agent, model, lastOutcome, createdAt, updatedAt
            FROM worker WHERE workerId = ?`,
         )
         .get(workerId) as WorkerRow | undefined) ?? null
@@ -359,7 +368,7 @@ export class LocalStore {
     // Creation order (workerId as tiebreak): the serial write queue drains FIFO on it.
     return this.db
       .prepare(
-        `SELECT workerId, threadId, repoId, mode, state, sessionId, sessionFile, lastKnownEntryId, branch, worktree, base, worktreeCleanedAt, agent, lastOutcome, createdAt, updatedAt
+        `SELECT workerId, threadId, repoId, mode, state, sessionId, sessionFile, lastKnownEntryId, branch, worktree, base, worktreeCleanedAt, agent, model, lastOutcome, createdAt, updatedAt
          FROM worker ORDER BY createdAt, workerId`,
       )
       .all() as unknown as WorkerRow[];
@@ -389,6 +398,69 @@ export class LocalStore {
   }
 
   // --- Serial write queue (connector-pi.md §8.2, issue #16) ----------------------------
+
+  setWorkerModel(workerId: string, model: string | undefined): void {
+    this.db.prepare("UPDATE worker SET model = ? WHERE workerId = ?").run(model ?? null, workerId);
+  }
+
+  setSessionIdentity(workerId: string, sessionId: string, sessionFile: string | null): void {
+    this.db.prepare("UPDATE worker SET sessionId = ?, sessionFile = ?, updatedAt = ? WHERE workerId = ?")
+      .run(sessionId, sessionFile, Date.now(), workerId);
+  }
+
+  recordDelivery(workerId: string, commandId: string, state: "sending" | "delivered", turnId?: string): void {
+    this.db.prepare(`INSERT INTO agent_delivery (workerId, commandId, state, turnId, updatedAt) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(commandId) DO UPDATE SET state = excluded.state, turnId = excluded.turnId, updatedAt = excluded.updatedAt`)
+      .run(workerId, commandId, state, turnId ?? null, Date.now());
+    this.setDeferredState(commandId, state);
+  }
+
+  clearRejectedDelivery(commandId: string): void {
+    // The server explicitly rejected this request before execution. Clear its intent
+    // atomically with restoring a deferred input to known-unsent state.
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("DELETE FROM agent_delivery WHERE commandId = ? AND state = 'sending'").run(commandId);
+      this.db.prepare("UPDATE deferred_send SET state = 'queued' WHERE commandId = ? AND state = 'sending'").run(commandId);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  deliveries(workerId: string): Array<{ commandId: string; state: string; turnId: string | null }> {
+    return this.db.prepare("SELECT commandId, state, turnId FROM agent_delivery WHERE workerId = ? ORDER BY updatedAt, rowid").all(workerId) as any;
+  }
+
+  setAgentProcess(workerId: string, ref: ProcRef): void {
+    this.db.prepare("INSERT INTO agent_process (workerId, ref) VALUES (?, ?) ON CONFLICT(workerId) DO UPDATE SET ref = excluded.ref")
+      .run(workerId, JSON.stringify(ref));
+  }
+
+  getAgentProcess(workerId: string): ProcRef | null {
+    const row = this.db.prepare("SELECT ref FROM agent_process WHERE workerId = ?").get(workerId) as { ref: string } | undefined;
+    return row ? JSON.parse(row.ref) : null;
+  }
+
+  queueDeferred(workerId: string, commandId: string, input: { text: string; images?: { data: string; mimeType: string }[] }): void {
+    this.db.prepare("INSERT OR IGNORE INTO deferred_send (commandId, workerId, input) VALUES (?, ?, ?)").run(commandId, workerId, JSON.stringify(input));
+  }
+
+  deferred(workerId: string, all = false): DeferredSendRow[] {
+    const rows = this.db.prepare(`SELECT commandId, input, state, sessionFile, afterEntryId FROM deferred_send
+      WHERE workerId = ? ${all ? "" : "AND state NOT IN ('delivered', 'returned')"} ORDER BY position`).all(workerId) as Array<any>;
+    return rows.map((row) => ({ ...row, ...JSON.parse(row.input) }));
+  }
+
+  setDeferredState(commandId: string, state: DeferredSendState): void {
+    this.db.prepare("UPDATE deferred_send SET state = ? WHERE commandId = ?").run(state, commandId);
+  }
+
+  armDeferred(commandId: string, sessionFile: string | null, afterEntryId: string | null): void {
+    this.db.prepare("UPDATE deferred_send SET state = 'sending', sessionFile = ?, afterEntryId = ? WHERE commandId = ? AND state = 'queued'")
+      .run(sessionFile, afterEntryId, commandId);
+  }
 
   saveQueuedStart(workerId: string, commandId: string, args: unknown): void {
     this.db
@@ -503,6 +575,7 @@ export interface WorkerRow {
   state: string;
   /** Which agent owns the worker (issue #17); 'pi' for rows predating Claude Code. */
   agent?: string | null;
+  model?: string | null;
   sessionId?: string | null;
   sessionFile?: string | null;
   /** §10: the last session entry id the connector saw (pre-launch external-change baseline). */
@@ -516,5 +589,11 @@ export interface WorkerRow {
   lastOutcome?: string | null;
   createdAt?: number;
   updatedAt?: number;
+}
+
+export type DeferredSendState = "queued" | "sending" | "delivered" | "ambiguous" | "returning" | "returned";
+export interface DeferredSendRow {
+  commandId: string; text: string; images?: { data: string; mimeType: string }[];
+  state: DeferredSendState; sessionFile: string | null; afterEntryId: string | null;
 }
 
