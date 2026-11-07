@@ -16,7 +16,27 @@
 | 暂缓 | F. 图片输入 | owner 先决定范围 | 见 F 第 0 步 |
 | 收尾 | G. 本地清理 | owner 同意后由审查方做 | 删除前确认 |
 
-A 和 B 改动的文件不重叠，可以并行。C 依赖 A、B 合入分支。D 依赖 C 的分支状态。E 依赖 D 通过。
+A 和 B 的代码文件不重叠，可以并行。C 依赖 A、B 合入分支。D 依赖 C 的分支状态。E 依赖 D 通过。
+
+### A、B 并行时的分支规则
+
+两个任务都从 `feat/codex-cli-workers` 的最新提交各开一个分支，互不推送对方的分支：
+
+- A：`feat/codex-doctor`
+- B：`feat/codex-manager-readonly`
+
+文件归属如下，避免冲突：
+
+| 文件 | A | B |
+| --- | --- | --- |
+| `apps/connector/src/cli.ts`、`service.ts`、`codex-adapter.ts` | 可改 | 不改 |
+| `apps/connector/test/bin.test.ts`、`service.test.ts`、`proxy.test.ts`、`codex-adapter.test.ts` | 可改 | 不改 |
+| `apps/connector/test/codex-connector-live.test.ts`、`codex-live.test.ts`、新的共享 live helper | 不改 | 可改 |
+| `docs/codex-cli.md` | 只改 “Local setup” 一节 | 只改 “Clean readonly acceptance” 一节 |
+| `docs/codex-cli-validation.md` | 不改 | 可改 |
+| `apps/connector/README.md` | 可改 | 不改 |
+
+如果某个任务发现必须改归另一方的文件，停下来报告，不要自己改。两个分支都审查通过后，由审查方依次合入 `feat/codex-cli-workers`，然后重跑一次完整 Connector 测试。
 
 ## 所有计划共用的约束
 
@@ -28,7 +48,7 @@ A 和 B 改动的文件不重叠，可以并行。C 依赖 A、B 合入分支。
 - 公开文档只写汇总结果和可复现的测试名，不写本机绝对路径、机器 ID、会话 ID、thread ID、设备 ID。原始证据放 `/tmp` 下，不入库。
 - 不杀与 Orbit 无关的进程（包括 Codex 桌面版及其 app-server）。只能停止本次测试自己启动、且身份可校验的进程。
 - 未经 owner 明确授权，不合并 main、不打 `v*` tag（会触发 `release.yml` 自动 `npm publish`）、不 `npm publish`、不部署、不改 Cloudflare 或 GitHub 设置、不改计费。
-- 只推送到 `feat/codex-cli-workers`，不 force push。
+- 只推送到本计划指定的分支（A、B 用各自的分支，其余用 `feat/codex-cli-workers`），不 force push。
 - 使用 `package.json` 里 `packageManager` 固定的 pnpm 版本；本地版本不符时先 `corepack enable`。不要回退 `packageManager` 字段。
 - 模拟测试和真实 CLI 验收分开报告。失败、跳过、重跑都要如实写出，不能把早期失败改写成通过。
 
@@ -300,4 +320,21 @@ pnpm --dir apps/connector typecheck
 遇到需要 owner 授权的步骤，停下来说明需要什么授权，不要绕过。
 测试只有放宽保护才能通过时，停下来报告，不要修改保护逻辑。
 完成后推送到 feat/codex-cli-workers（不要 force push，不要合并 main，不要打 tag），并按“交回审查”一节给出材料。
+```
+
+A、B 并行时，分别发给两个 Codex 会话：
+
+```text
+你在 sclfcz/Orbit 仓库工作。先从 origin/feat/codex-cli-workers 的最新提交新建分支 feat/codex-doctor。请完整阅读 docs/plans/codex-remaining-work.md 中“所有计划共用的约束”“A、B 并行时的分支规则”和“每个计划交回审查时必须提供”三节，然后只实施计划 A。
+只改分支规则表里归 A 的文件；需要改其他文件时停下来报告。
+测试只有放宽保护才能通过时，停下来报告，不要修改保护逻辑。
+完成后只推送 feat/codex-doctor（不要 force push，不要合并到 feat/codex-cli-workers 或 main，不要打 tag），并按“交回审查”一节给出材料。
+```
+
+```text
+你在 sclfcz/Orbit 仓库工作。先从 origin/feat/codex-cli-workers 的最新提交新建分支 feat/codex-manager-readonly。请完整阅读 docs/plans/codex-remaining-work.md 中“所有计划共用的约束”“A、B 并行时的分支规则”和“每个计划交回审查时必须提供”三节，然后只实施计划 B。
+干净只读 CODEX_HOME 由 owner 提供路径；不要自己创建、登录或复制认证。没有路径时停下来问 owner。
+只改分支规则表里归 B 的文件；需要改其他文件时停下来报告。
+测试只有放宽保护才能通过时，停下来报告，不要修改保护逻辑。
+完成后只推送 feat/codex-manager-readonly（不要 force push，不要合并到 feat/codex-cli-workers 或 main，不要打 tag），并按“交回审查”一节给出材料。
 ```
