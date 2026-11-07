@@ -71,6 +71,8 @@ orbit upgrade                # install the latest package and restart
 orbit uninstall              # remove the service, preserve local state
 ```
 
+`orbit doctor` checks both the Codex CLI visible in this shell and the one visible on the installed service's PATH. The service PATH is recorded when `orbit connect` or `orbit upgrade` installs the unit. If the shell finds Codex but the service does not, run `orbit upgrade` from that shell to record the current PATH; `orbit restart` keeps the recorded PATH.
+
 State remains in `~/.sig/`. You can revoke a machine from the Orbit workspace at any time.
 
 ## License
@@ -153,6 +155,8 @@ orbit restart                # 重启后台服务
 orbit upgrade                # 安装最新包并重启
 orbit uninstall              # 移除服务，保留本地状态
 ```
+
+`orbit doctor` 会分别检查当前 shell 和已安装后台服务 PATH 中的 Codex CLI。服务 PATH 在 `orbit connect` 或 `orbit upgrade` 安装 unit 时记录。如果 shell 能找到 Codex、服务却找不到，请在该 shell 中运行 `orbit upgrade` 重新记录当前 PATH；`orbit restart` 会沿用已记录的 PATH，不会刷新。
 
 状态保存在 `~/.sig/`。你可以随时在 Orbit 工作台撤销一台电脑。
 

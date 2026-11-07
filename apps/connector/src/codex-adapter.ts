@@ -303,8 +303,15 @@ export class CodexAdapter implements AgentAdapter {
 }
 
 /** Probe only CLI metadata, with a bounded timeout; never starts a model turn. */
-export function detectCodex(command: string[] = ["codex"]): { installed: boolean; version?: string; diagnostic?: string } {
-  const result = spawnSync(command[0]!, [...command.slice(1), "--version"], { encoding: "utf8", timeout: 5000 });
+export function detectCodex(
+  command: string[] = ["codex"],
+  env?: NodeJS.ProcessEnv,
+): { installed: boolean; version?: string; diagnostic?: string } {
+  const result = spawnSync(command[0]!, [...command.slice(1), "--version"], {
+    encoding: "utf8",
+    timeout: 5000,
+    ...(env ? { env } : {}),
+  });
   if (result.error || result.status !== 0) return { installed: false, diagnostic: "Codex CLI not found on daemon PATH (or probe timed out)" };
   const version = result.stdout.trim();
   // Native cross-process writer locking was traced and live-tested at alpha.6.
