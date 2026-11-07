@@ -1,6 +1,6 @@
 # Codex CLI implementation validation — 2026-11-07
 
-Overall: **package regressions, local browser workflow, cold continuation and a clean readonly model turn pass locally**. Real-CLI evidence covers worktree writes, structured reports, steer, interruption with shell cleanup, local history, Connector restart, and uncertain-crash no-replay recovery. Manager-level cold continuation succeeds while an unrelated real app-server remains alive; same-thread competing writers are refused before input. Readonly model acceptance uses a separately authenticated clean Codex home; inherited external integrations remain rejected.
+Overall: **package regressions, local browser workflow, cold continuation, and clean readonly execution through both the adapter and Connector manager path pass locally**. Real-CLI evidence covers worktree writes, structured reports, steer, interruption with shell cleanup, local history, Connector restart, and uncertain-crash no-replay recovery. Manager-level cold continuation succeeds while an unrelated real app-server remains alive; same-thread competing writers are refused before input. Readonly acceptance uses a separately authenticated clean Codex home; inherited external integrations remain rejected.
 
 This public record contains aggregate results and reproducible test names. Raw session records, machine identifiers, local paths, credentials and detailed process evidence remain local. The owner authorized committing and pushing verified source to a feature branch; deployment and merging main are outside this task.
 
@@ -8,7 +8,7 @@ This public record contains aggregate results and reproducible test names. Raw s
 
 | Check | Result |
 | --- | --- |
-| `pnpm --dir apps/connector test`, including build | **474 passed, 7 skipped**; 47 files passed, 3 skipped; 31.05 s |
+| `pnpm --dir apps/connector test`, including build | **474 passed, 9 skipped**; 47 files passed, 3 skipped; 30.07 s |
 | `pnpm --dir apps/steward test` | **668 passed**, including 12 generated-auth tests; earlier unchanged-package run |
 | `pnpm --dir packages/protocol test` | **61 passed**; earlier unchanged-package run |
 | `pnpm --dir apps/preview-machine test` | **7 passed**; earlier unchanged-package run |
@@ -20,6 +20,7 @@ This public record contains aggregate results and reproducible test names. Raw s
 | Focused cold-continuation and delivery regressions | **67 passed**, 6.36 s; Connector typecheck passed |
 | Independent npm CLI `0.167.0`: both real acceptance files, sequential | **6 passed**, 193.93 s; includes safe readonly refusal, not a clean readonly model run |
 | Clean-home readonly model acceptance, npm CLI `0.167.0` | **1 passed**, 5 deselected; 40.59 s; actual read, correlated write denial and structured report |
+| Clean-home readonly through Connector/WS manager path, npm CLI `0.167.0` | **1 passed**, 1 skipped; 18.58 s; default home refused before model input |
 | Adapter regressions and default live-test gating after readonly addition | **27 passed, 6 skipped**, 6.12 s; Connector typecheck passed |
 | `pnpm typecheck` | All workspace packages passed after the cold-continuation fix |
 | `git diff --check` | Passed |
@@ -95,7 +96,11 @@ A separate clean-home model acceptance subsequently passed with independent `cod
 
 The test created a random marker in an input file, without revealing it in the model prompt. Through the production CodexAdapter in readonly mode, the model invoked the requested shell command to read that file and attempt a write. Its exact native call ID was correlated with the corresponding tool result: the output contained the random marker, an OS permission-denial message and a nonzero exit code. The input bytes remained unchanged, the output file was absent, and the model returned the required structured `done` report containing the marker. Refusal before model execution, a model-authored claim of denial, or file absence alone cannot pass this test. No runtime or preflight protection was changed.
 
-The new case requires both `ORBIT_CODEX_LIVE=1` and `ORBIT_CODEX_READONLY_HOME` pointing at the separately authenticated clean home. It is skipped by default. The existing inherited-config refusal case remains separate. See [Codex support](codex-cli.md#clean-readonly-acceptance) for the reproducible setup. This acceptance covers the clean local configuration on the tested platform, not arbitrary external integrations or the browser/manager path in that home.
+The new case requires both `ORBIT_CODEX_LIVE=1` and `ORBIT_CODEX_READONLY_HOME` pointing at the separately authenticated clean home. It is skipped by default. The existing inherited-config refusal case remains separate. See [Codex support](codex-cli.md#clean-readonly-acceptance) for the reproducible setup. This acceptance covers the clean local configuration on the tested platform, not arbitrary external integrations or the deployed browser/cloud environment.
+
+The managed-path acceptance then passed through a real Connector subprocess, `WorkerManager`, and WebSocket dispatch: **1 test passed in 18.58 seconds**, with one skipped. The clean-home worker returned a structured `done` report containing the undisclosed marker; the repository stayed clean, input bytes were unchanged, the output file was absent, and the matching native shell call showed the expected permission denial and nonzero exit code. A default-home control Connector was refused with `unsupported_capability`; recorded app-server stdin contained initialization and account reads but no `turn/start` and no control prompt. Evidence is in `/tmp/orbit-codex-connector-clean-readonly.json`. No production protection or preflight logic was changed.
+
+A later adapter-level rerun after extracting the shared native-rollout helper stopped at the account usage limit before model completion (`usage_limit_exceeded`). It is not counted as a pass; the managed-path test exercised the same helper successfully, and the earlier adapter-level clean-home result above remains separately recorded.
 
 ## Fault regressions and acceptance repairs
 
@@ -112,7 +117,7 @@ The original implementation snapshot had 426 Connector passes, 11 stale-bin fail
 ## Remaining boundaries
 
 - `0.166.0-alpha.6` from the desktop bundle and independently installed `0.167.0` were live-tested. Discovery accepts the narrow 0.166/0.167 family; other accepted releases and platforms are not thereby certified.
-- Readonly model execution passed in a separately authenticated clean home. The default home still contains external integrations and remains safely refused for readonly work; installing an independent binary does not isolate inherited configuration.
+- Readonly model execution and the Connector subprocess/manager path passed in a separately authenticated clean home. The default home still contains external integrations and remains safely refused before model input; installing an independent binary does not isolate inherited configuration.
 - Cold continuation and same-thread exclusion were verified with separate real app-servers using the existing home. This does not certify every desktop storage mode; native exclusion requires compatible local-store writers sharing `CODEX_HOME`.
 - Images remain unsupported, and monetary cost is not inferred from token usage.
 - No deployed cloud environment was tested.

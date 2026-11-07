@@ -59,3 +59,11 @@ ORBIT_CODEX_LIVE=1 ORBIT_CODEX_READONLY_HOME=/absolute/path/to/clean-codex-home 
 ```
 
 This test requires actual model execution through CodexAdapter: it checks an undisclosed random file marker, correlates the shell call with its native permission-denied result and nonzero exit code, verifies unchanged input and absent output, and requires a structured report. It does not accept preflight refusal as success. `ORBIT_CODEX_READONLY_HOME` is a test-only input; it does not change the daemon's configured home. Continue using the original home for existing workers and threads; this acceptance creates new test threads in the isolated home.
+
+The managed-path acceptance runs the same clean-home readonly check through a real Connector subprocess, `WorkerManager`, and WebSocket command dispatch:
+
+```bash
+ORBIT_CODEX_LIVE=1 ORBIT_CODEX_READONLY_HOME=/absolute/path/to/clean-codex-home pnpm --dir apps/connector exec vitest run test/codex-connector-live.test.ts --no-file-parallelism
+```
+
+It requires a structured `done` report containing the undisclosed marker, the matching native shell call and permission-denied result with a nonzero exit code, unchanged input, absent output, and a clean repository. A second Connector boot with the default `CODEX_HOME` must return `unsupported_capability` before `turn/start`; the test records app-server input and rejects the result if any prompt reaches the model. The test does not create, copy, or modify credentials or configuration in either home.
