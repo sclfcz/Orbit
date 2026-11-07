@@ -6,7 +6,7 @@
 // The unit runs `<node> <bin>/sig.js daemon`; credentials stay in the LocalStore
 // (never in the unit file), and the log directory is under the state dir.
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir, platform } from "node:os";
 import { promisify } from "node:util";
@@ -100,8 +100,51 @@ export function getServiceInstaller(spec: ServiceSpec, deps: ServiceDeps = {}): 
   return null;
 }
 
+/** PATH recorded in the installed unit, or null when it is absent or unreadable. */
+export function readServicePath(installer: ServiceInstaller | null): string | null {
+  if (!installer) return null;
+  return installer.kind === "launchd" ? launchdPath(installer.unitPath) : systemdPath(installer.unitPath);
+}
+
 function xmlEscape(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function xmlUnescape(text: string): string {
+  return text.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+}
+
+/** Reads PATH from the EnvironmentVariables block of an installed launchd plist. */
+function launchdPath(plistPath: string): string | null {
+  try {
+    const content = readFileSync(plistPath, "utf8");
+    const environment = /<key>EnvironmentVariables<\/key>\s*<dict>([\s\S]*?)<\/dict>/.exec(content);
+    const path = environment ? /<key>PATH<\/key>\s*<string>([^<]*)<\/string>/.exec(environment[1]!) : null;
+    return path ? xmlUnescape(path[1]!.trim()) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Reads PATH from `Environment="PATH=..."` (or unquoted `Environment=PATH=...`) in a unit. */
+function systemdPath(unitFile: string): string | null {
+  let content: string;
+  try {
+    content = readFileSync(unitFile, "utf8");
+  } catch {
+    return null;
+  }
+  for (const line of content.split("\n")) {
+    const assignment = /^\s*Environment\s*=\s*(.*?)\s*$/.exec(line);
+    if (!assignment) continue;
+    let value = assignment[1]!;
+    if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
+      value = value.slice(1, -1).replace(/\\(["\\])/g, "$1");
+    }
+    const separator = value.indexOf("=");
+    if (separator !== -1 && value.slice(0, separator) === "PATH") return value.slice(separator + 1);
+  }
+  return null;
 }
 
 // --- launchd (macOS user agent) -------------------------------------------------------------

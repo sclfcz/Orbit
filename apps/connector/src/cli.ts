@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { Agent, EnvHttpProxyAgent, fetch as undiciFetch, type Dispatcher } from "undici";
+import { detectCodex } from "./codex-adapter.ts";
 import { runDaemon } from "./daemon.ts";
 import { installAssets } from "./install.ts";
 import { tailFile } from "./logger.ts";
@@ -39,7 +40,7 @@ import {
   resolveProxyConfig,
   type ProxyConfig,
 } from "./proxy.ts";
-import { getServiceInstaller, SIG_LABEL, type ServiceInstaller, type ServiceSpec } from "./service.ts";
+import { getServiceInstaller, readServicePath, SIG_LABEL, type ServiceInstaller, type ServiceSpec } from "./service.ts";
 import { LocalStore } from "./store.ts";
 import { identifyWorkspace } from "./worktree.ts";
 import { runUpgrade } from "./upgrade.ts";
@@ -353,8 +354,9 @@ async function doctorCommand(): Promise<void> {
     }
   }
 
+  let installer: ServiceInstaller | null = null;
   try {
-    const installer = getServiceInstaller(serviceSpec(binEntryPath()));
+    installer = getServiceInstaller(serviceSpec(binEntryPath()));
     if (installer) {
       const status = await installer.status();
       const detail = status.installed
@@ -368,6 +370,36 @@ async function doctorCommand(): Promise<void> {
     }
   } catch (err) {
     console.log(`service:            unknown (${err instanceof Error ? err.message : String(err)})`);
+  }
+
+  // Codex is an optional agent: these diagnostics never change `healthy` or the exit code.
+  const shellCodex = detectCodex();
+  console.log(`codex (this shell):  ${describeCodex(shellCodex)}`);
+  let serviceCodex: ReturnType<typeof detectCodex> | null = null;
+  if (!installer) {
+    console.log("codex (service PATH): unknown — background services are not supported on this platform");
+  } else {
+    const servicePath = readServicePath(installer);
+    if (servicePath === null) {
+      console.log(
+        `codex (service PATH): unknown — ${
+          existsSync(installer.unitPath) ? "installed service PATH not readable" : "service not installed"
+        }`,
+      );
+    } else {
+      serviceCodex = detectCodex(["codex"], { PATH: servicePath });
+      console.log(`codex (service PATH): ${describeCodex(serviceCodex)}`);
+    }
+  }
+  if (
+    shellCodex.installed &&
+    serviceCodex &&
+    !serviceCodex.installed &&
+    serviceCodex.diagnostic?.startsWith("Codex CLI not found")
+  ) {
+    console.log(
+      `codex works in this shell but not on the installed service PATH — if it was installed after the service, run \`orbit upgrade --version ${VERSION}\` from this shell (for a source install, repeat the source install steps); \`orbit restart\` keeps the recorded PATH`,
+    );
   }
 
   if (config) {
@@ -417,6 +449,12 @@ async function doctorCommand(): Promise<void> {
   }
 
   process.exitCode = healthy ? 0 : 1;
+}
+
+function describeCodex(result: ReturnType<typeof detectCodex>): string {
+  if (result.installed) return result.version ?? "ok";
+  if (result.diagnostic?.startsWith("Unsupported")) return `incompatible — ${result.diagnostic}`;
+  return "not found";
 }
 
 async function statusCommand(): Promise<void> {

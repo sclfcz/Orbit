@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CodexAdapter, detectCodex } from "../src/codex-adapter.ts";
 import type { RawAdapterEvent, StartSpec } from "../src/agent.ts";
@@ -194,4 +194,31 @@ describe("Codex app-server", () => {
       expect(detectCodex([...t.command, `--fake-version=codex-cli ${version}`]).installed).toBe(true);
     }
   });
+  it("probes codex on an explicitly supplied service PATH", () => {
+    const dir = tmpDir("codex-detect");
+    const bin = join(dir, "bin");
+    mkdirSync(bin);
+    const fake = join(import.meta.dirname, "fake-codex.mjs");
+    writeFileSync(
+      join(bin, "codex"),
+      `#!/bin/sh\nexec "${process.execPath}" "${fake}" "$@"\n`,
+      { mode: 0o755 },
+    );
+
+    expect(detectCodex(["codex"], { PATH: bin })).toMatchObject({ installed: true, version: "codex-cli 0.166.0-alpha.6" });
+    expect(
+      detectCodex(["codex", "--fake-version=codex-cli 0.168.0"], { PATH: bin }).installed,
+    ).toBe(false);
+
+    const empty = join(dir, "empty");
+    mkdirSync(empty);
+    expect(detectCodex(["codex"], { PATH: empty })).toMatchObject({ installed: false });
+  });
+  it("treats a version probe that exceeds the five-second budget as unavailable", () => {
+    const slow = join(tmpDir("codex-slow"), "slow.mjs");
+    writeFileSync(slow, "setTimeout(() => {}, 10_000);\n");
+    const probe = detectCodex([process.execPath, slow]);
+    expect(probe.installed).toBe(false);
+    expect(probe.diagnostic).toContain("timed out");
+  }, 10_000);
 });
