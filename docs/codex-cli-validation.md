@@ -18,12 +18,29 @@ This public record contains aggregate results and reproducible test names. Raw s
 | Rebuilt local browser dispatch, same-turn steer, interruption and history | Passed; no late shell write after its original deadline |
 | Rebuilt browser continuation of the interrupted session | Passed; same native thread, new structured report, history updated |
 | Focused cold-continuation and delivery regressions | **67 passed**, 6.36 s; Connector typecheck passed |
+| Independent npm CLI `0.167.0`: both real acceptance files, sequential | **6 passed**, 193.93 s; includes safe readonly refusal, not a clean readonly model run |
 | `pnpm typecheck` | All workspace packages passed after the cold-continuation fix |
 | `git diff --check` | Passed |
 
 Package suites were run separately, not relabelled as a recursive test run. Their latest recorded results total **1,210 passing tests**, excluding opt-in real checks and overlapping focused runs. Steward/protocol/preview-machine ran earlier; their implementation did not change during the Connector fixes. Live tests remain opt-in and are skipped in the default suite.
 
-Toolchain: Node 26.0.0, pinned pnpm 10.33.0, macOS, desktop-bundled `codex-cli 0.166.0-alpha.6` with the existing login. Only test-process PATH was adjusted. No global Codex configuration, authentication files or unrelated desktop processes were changed. This does not certify every supported release or a clean independent CLI installation.
+Earlier acceptance toolchain: Node 26.0.0, pinned pnpm 10.33.0, macOS, desktop-bundled `codex-cli 0.166.0-alpha.6` with the existing login. Those runs adjusted only test-process PATH. They did not certify an independent CLI installation.
+
+## Independent CLI installation — 2026-11-07
+
+Installed the official npm package with `npm install -g @openai/codex@0.167.0`, the stable release available during this acceptance. The normal shell PATH now resolves `codex` to the standalone npm package launcher; its resolved path is outside the desktop app bundle. `codex --version` reports `codex-cli 0.167.0`, and `codex login status` confirms the existing ChatGPT login. No authentication copy, global Codex configuration edit, shell-profile change or desktop replacement was needed. Connector service setup captures PATH; a previously running service must be restarted after installation to discover the CLI.
+
+Ran both opt-in acceptance files without a desktop PATH override or an `ORBIT_CODEX_COMMAND` override:
+
+```bash
+ORBIT_CODEX_LIVE=1 pnpm --dir apps/connector exec vitest run test/codex-live.test.ts test/codex-connector-live.test.ts --no-file-parallelism
+```
+
+Result: **2 files, 6 tests passed in 193.93 seconds**. Probe and task evidence report `codex-cli 0.167.0`; all three separate Connector boots advertise that version. Real checks passed for handshake/config reads, isolated worktree write and structured report, rejection of a second writer before input, same-thread continuation after release, local history, steer, interruption, owned-process cleanup and no delayed shell write. The native sandbox denied a real write under `readOnly` and allowed the same command under the restricted writable policy.
+
+The Connector subprocess test successfully cold-continued while an unrelated real app-server stayed alive. History reconstruction matched the original local record across **31 pages, 60 fragments and 35 split fragments**. Uncertain-crash recovery preserved receipts, rejected duplicate/retry commands and observed exactly one start-marker execution. No runtime changes were required for the stable CLI.
+
+Independent installation does not imply isolated configuration: this CLI still uses the existing Codex home, including inherited external integrations. The readonly preflight again returned `unsupported_capability` before model input, recorded as `refused_unverifiable_external_tools`. That expected refusal is one of the six passing checks; it is not proof of a clean readonly model turn. Clean readonly model acceptance remains a separate gate. The browser acceptance below used the earlier desktop-bundled version and was not repeated for this installation.
 
 ## Local browser acceptance
 
@@ -86,8 +103,8 @@ The original implementation snapshot had 426 Connector passes, 11 stale-bin fail
 
 ## Remaining boundaries
 
-- Only `0.166.0-alpha.6` was live-tested. Discovery accepts the narrow 0.166/0.167 family; acceptance of a version is not certification of that release.
-- A clean independent CLI configuration is still needed to certify readonly model execution.
+- `0.166.0-alpha.6` from the desktop bundle and independently installed `0.167.0` were live-tested. Discovery accepts the narrow 0.166/0.167 family; other accepted releases and platforms are not thereby certified.
+- A clean Codex configuration is still needed to certify readonly model execution; installing an independent binary does not isolate inherited configuration.
 - Cold continuation and same-thread exclusion were verified with separate real app-servers using the existing home. This does not certify every desktop storage mode; native exclusion requires compatible local-store writers sharing `CODEX_HOME`.
 - Images remain unsupported, and monetary cost is not inferred from token usage.
 - No deployed cloud environment was tested.
