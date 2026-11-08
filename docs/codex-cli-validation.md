@@ -2,7 +2,7 @@
 
 Overall: **package regressions, local browser workflow, cold continuation, clean readonly execution through both the adapter and Connector manager path, and deployed staging acceptance pass**. Real-CLI evidence covers worktree writes, structured reports, steer, interruption with shell cleanup, local history, Connector restart, networking recovery, and uncertain-crash no-replay recovery. Manager-level cold continuation succeeds while an unrelated real app-server remains alive; same-thread competing writers are refused before input. Readonly acceptance uses a separately authenticated clean Codex home; inherited external integrations remain rejected.
 
-This public record contains aggregate results and reproducible test names. Raw session records, machine identifiers, local paths, credentials and detailed process evidence remain local. The owner merged the feature into main on 2026-11-07 and separately authorized the staging deployment below; the production deployment and npm release have not been performed.
+This public record contains aggregate results and reproducible test names. Raw session records, machine identifiers, local paths, credentials and detailed process evidence remain local. The owner merged the feature into main on 2026-11-07 and separately authorized the staging deployment, the npm release and the production deployment below.
 
 ## Final checks
 
@@ -119,7 +119,13 @@ An isolated Cloudflare staging Worker was deployed from the pre-Codex main commi
 - Restarting the foreground Connector with the same isolated state retained the worker state and the 75-entry session view. No new start, report, or settle events were emitted for the completed worker.
 - A controlled network outage used a local HTTP proxy with WebSocket upgrade forwarding. Removing it produced repeated `1006` closes; restoring it produced `welcome` again. No command was replayed and the completed worker remained `idle/reported`.
 - A default-home Codex readonly task was rejected with `unsupported_capability` before model input; the UI displayed the inherited-external-tools explanation. The corresponding worker had no Codex session identity.
-- Acceptance Connectors were stopped, both test machine registrations were revoked, the temporary old-version worktree was removed, and the staging Worker was retained for Owner cleanup.
+- Acceptance Connectors were stopped, both test machine registrations were revoked, and the temporary old-version worktree was removed. The Owner later had the staging Worker deleted on 2026-11-08.
+
+## Release and production rollout — 2026-11-08
+
+- `@sclfcz/orbit@0.2.0` was published by `release.yml` from the `v0.2.0` tag and is the `latest` dist-tag. `npx @sclfcz/orbit@0.2.0 --version` prints `0.2.0`. The first two publish attempts failed before any upload (an empty token secret, then a token without 2FA bypass); the third attempt succeeded. No version was overwritten.
+- The production Steward was redeployed from the same tag. Its secret names were identical before and after, the unauthenticated gates returned `/app` `200` and `/api/messages` `401`, and the already-paired machine stayed online.
+- One paired macOS machine was upgraded from npm `0.1.3` with `orbit upgrade --version 0.2.0`. `orbit doctor` reported `codex-cli 0.167.0` in both the shell and the background-service PATH, and the workspace Machines page listed `pi, claude-code, codex`.
 
 ## Fault regressions and acceptance repairs
 
@@ -137,7 +143,7 @@ The original implementation snapshot had 426 Connector passes, 11 stale-bin fail
 
 - `0.166.0-alpha.6` from the desktop bundle and independently installed `0.167.0` were live-tested. Discovery accepts the narrow 0.166/0.167 family; other accepted releases and platforms are not thereby certified.
 - Readonly model execution and the Connector subprocess/manager path passed in a separately authenticated clean home. The default home still contains external integrations and remains safely refused before model input; installing an independent binary does not isolate inherited configuration.
-- Deployed staging acceptance passed for the tested Cloudflare account and platform. The formal production deployment and npm release were not performed.
+- Deployed staging acceptance passed for the tested Cloudflare account and platform. The production rollout was checked through the unauthenticated gates, machine presence and `orbit doctor`; a Codex task was not separately run on production.
 - Cold continuation and same-thread exclusion were verified with separate real app-servers using the existing home. This does not certify every desktop storage mode; native exclusion requires compatible local-store writers sharing `CODEX_HOME`.
 - Images remain unsupported, and monetary cost is not inferred from token usage.
 

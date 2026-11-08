@@ -1,6 +1,6 @@
 # Codex CLI 接入：剩余工作交接清单
 
-状态：A、B、C、G 已完成；PR [sclfcz/Orbit#1](https://github.com/sclfcz/Orbit/pull/1) 已由 owner 合并到 main（合并提交 `50588c2`，2026-11-07），main 的 CI 通过。D 已于 2026-11-08 在 staging 验收通过（分支 `feat/codex-staging-acceptance`，只改文档）。下一步是 E。本文是交给 Codex 的任务说明。每个计划独立交付，完成后由审查方核对 diff、测试输出和证据，再决定下一个。
+状态：A、B、C、G 已完成；PR [sclfcz/Orbit#1](https://github.com/sclfcz/Orbit/pull/1) 已由 owner 合并到 main（合并提交 `50588c2`，2026-11-07），main 的 CI 通过。D 已于 2026-11-08 在 staging 验收通过（分支 `feat/codex-staging-acceptance`，只改文档），staging Worker 已于同日删除。E 已于 2026-11-08 完成：npm 发布 `@sclfcz/orbit@0.2.0`，正式 Worker 部署 `v0.2.0`，本机 Connector 升级后 `orbit doctor` 显示 Codex 可用。剩下的只有暂缓的 F。本文是交给 Codex 的任务说明。每个计划独立交付，完成后由审查方核对 diff、测试输出和证据，再决定下一个。
 
 已在 main：Codex worker 实现、冷接续修复、独立 CLI 0.167.0 验收、干净 home 只读模型验收、`orbit doctor` 的 Codex 诊断、管理路径下的干净 home 只读验收。记录见 [codex-cli-validation.md](../codex-cli-validation.md)。`feat/codex-cli-workers`、`feat/codex-doctor`、`feat/codex-manager-readonly` 已删除，后续工作不要再用这些分支名。
 
@@ -11,8 +11,8 @@
 | 1 | A. `orbit doctor` 的 Codex 诊断 | 已完成，在 main | — |
 | 2 | B. Connector 管理路径下的干净 home 只读验收 | 已完成，在 main | — |
 | 3 | C. 提 PR、跑 CI、整理合并前审查 | 已完成，PR #1 已合并 | — |
-| 4 | D. 部署环境（独立 staging Worker）验收 | 已完成，分支 `feat/codex-staging-acceptance`；staging Worker 保留待 owner 决定 | — |
-| 5 | E. 版本号、发 npm、部署正式环境 | **下一步**；合并已完成 | 每一步单独授权 |
+| 4 | D. 部署环境（独立 staging Worker）验收 | 已完成；staging Worker 已删除 | — |
+| 5 | E. 版本号、发 npm、部署正式环境 | 已完成（2026-11-08） | — |
 | 暂缓 | F. 图片输入 | owner 先决定范围 | 见 F 第 0 步 |
 | 收尾 | G. 本地清理 | 已完成（干净只读 `CODEX_HOME` 保留） | — |
 
@@ -259,7 +259,15 @@ pnpm --dir apps/connector typecheck
 
 ## E. 合并 main、发布 npm、部署正式环境
 
-只有 owner 对每一步分别明确授权后才能执行。Codex 可以先准备好变更，停在授权点前等待。
+已于 2026-11-08 完成，每一步都经 owner 单独授权：
+
+- 版本号经 PR #2 合入 main（`adc7f43`），`v0.2.0` tag 指向该提交。
+- `release.yml` 的发布前两次失败：第一次 `NPM_TOKEN` 为空值（`ENEEDAUTH`），第二次 token 未开启绕过 2FA（`EOTP`）。两次都没有向 npm 上传内容。换成限定 `@sclfcz/orbit`、绕过 2FA、30 天有效的 granular token 后，第三次重跑成功，`0.2.0` 成为 `latest`。
+- 正式 Worker 部署 `v0.2.0`。secret 名称前后一致（只有 `LOGIN_PASSWORD`，内部 key 由 Durable Object 自动生成），`/app` 200、`/api/messages` 401，已配对机器保持在线。
+- 本机 Connector 用 `orbit upgrade --version 0.2.0` 从 npx 0.1.3 升级为全局安装。`orbit doctor` 的两行 Codex 检查都是 `codex-cli 0.167.0`，Machines 页面的 Agents 显示 `pi, claude-code, codex`。
+- 之后的版本改用 npm Trusted Publishing（PR #3），不再需要 `NPM_TOKEN`。
+
+以下是原始步骤，保留作记录。只有 owner 对每一步分别明确授权后才能执行。
 
 ### 步骤
 
