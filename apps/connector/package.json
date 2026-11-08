@@ -1,6 +1,6 @@
 {
   "name": "@sclfcz/orbit",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Orbit connector: pairs this machine with your Orbit workspace and runs local coding agents as a background service.",
   "type": "module",
   "bin": {

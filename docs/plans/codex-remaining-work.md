@@ -264,7 +264,7 @@ pnpm --dir apps/connector typecheck
 ### 步骤
 
 1. **合并**（授权点 1）：已完成。owner 于 2026-11-07 用 merge commit 合并 PR #1（`50588c2`），早于 D；因此 main 已包含 Codex 功能，但尚未发布、尚未部署。
-2. **版本号**：在 main 上单独提交，把 `apps/connector/package.json` 的 `version` 从 `0.1.3` 改到 owner 指定的版本（新增 agent 能力，建议 `0.2.0`）。`VERSION` 从 `package.json` 读取，不需要改别处。同步检查 README 和 `docs/agent-connect.md` 中是否有写死的版本号。
+2. **版本号**：在分支 `release/v0.2.0` 上提交，经 PR 合入 main。`apps/connector/package.json` 的 `version` 从 `0.1.3` 改为 `0.2.0`（owner 2026-11-08 同意开始 E）。`VERSION` 从 `package.json` 读取；Codex app-server 握手里原先写死的 `0.1.3` 也改为读取 `VERSION`。README 和 `docs/agent-connect.md` 中没有写死的版本号。
 3. **发布 npm**（授权点 2）：发布方式是推送 `v<version>` tag，它会触发 `.github/workflows/release.yml`，用仓库 secret `NPM_TOKEN` 执行 `npm publish --access public`。推 tag 前确认：
    - `gh secret list --repo sclfcz/Orbit` 中存在 `NPM_TOKEN`（只看名字，不读值）。
    - tag 指向的提交就是第 2 步的版本号提交。

@@ -11,6 +11,7 @@ import { codexSessionPath, inspectCodexTail } from "../src/codex-session.ts";
 import { readFullSessionHistory } from "../src/full-session-history.ts";
 import { git, makeGitRepo, tmpDir, waitFor } from "./helpers.ts";
 import { findCorrelatedShellEvidence } from "./codex-live-helpers.ts";
+import { VERSION } from "../src/version.ts";
 
 describe.skipIf(process.env.ORBIT_CODEX_LIVE !== "1")("real Codex acceptance", () => {
   it("handshakes and reads configuration without calling a model", async () => {
@@ -18,7 +19,7 @@ describe.skipIf(process.env.ORBIT_CODEX_LIVE !== "1")("real Codex acceptance", (
     const dir = tmpDir("orbit-codex-live-probe");
     const rpc = new CodexTransport(["codex", "app-server", "--listen", "stdio://"], dir, childEnv(), () => {}, () => {}, 15000);
     try {
-      await rpc.request("initialize", { clientInfo: { name: "orbit_connector", title: "Orbit", version: "0.1.3" } });
+      await rpc.request("initialize", { clientInfo: { name: "orbit_connector", title: "Orbit", version: VERSION } });
       rpc.write({ method: "initialized", params: {} });
       const config = await rpc.request("config/read", { cwd: dir, includeLayers: false });
       expect(config.config).toBeTruthy();

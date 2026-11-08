@@ -8,6 +8,7 @@ import { processStartTime } from "./locks.ts";
 import { CodexRpcError, CodexTransport, type RpcMessage } from "./codex-transport.ts";
 import { killOrphans, listDescendants } from "./descendants.ts";
 import { CODEX_REPORT_SCHEMA, parseCodexReport } from "./codex-report.ts";
+import { VERSION } from "./version.ts";
 
 export interface CodexAdapterOptions {
   command?: string[];
@@ -61,7 +62,7 @@ export class CodexAdapter implements AgentAdapter {
     try {
       const pid = runtime.rpc.child.pid;
       if (pid) spec.onProcess?.({ pid, startTime: processStartTime(pid) });
-      await runtime.rpc.request("initialize", { clientInfo: { name: "orbit_connector", title: "Orbit", version: "0.1.3" } });
+      await runtime.rpc.request("initialize", { clientInfo: { name: "orbit_connector", title: "Orbit", version: VERSION } });
       runtime.rpc.write({ method: "initialized", params: {} });
       const auth = await runtime.rpc.request("account/read", { refreshToken: false });
       if (auth?.requiresOpenaiAuth === true && !auth.account) throw new AdapterError("auth", "Codex is not logged in. Run codex login on this machine, then retry.");
