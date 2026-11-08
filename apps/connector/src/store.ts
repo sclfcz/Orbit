@@ -279,6 +279,10 @@ export class LocalStore {
     return row ? this.toRegisteredRepo(row) : null;
   }
 
+  removeRepo(repoId: string): boolean {
+    return this.db.prepare("DELETE FROM repo WHERE repoId = ?").run(repoId).changes > 0;
+  }
+
   listRepos(): RegisteredRepo[] {
     return (
       this.db

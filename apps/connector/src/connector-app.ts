@@ -8,7 +8,7 @@ import os from "node:os";
 import { isAbsolute, join } from "node:path";
 import { ConnectorClient, type ClientOptions } from "./client.ts";
 import { CommandLog, type CommandResult } from "./commands.ts";
-import { RegisterRepoArgsSchema, type CmdMessage } from "@alexlikevibe/protocol";
+import { RegisterRepoArgsSchema, UnregisterRepoArgsSchema, type CmdMessage } from "@alexlikevibe/protocol";
 import { registerRepository } from "./repository.ts";
 import { EventLog } from "./events.ts";
 import type { LocalStore } from "./store.ts";
@@ -163,6 +163,10 @@ export class ConnectorApp {
         const path = requested === "~" ? os.homedir() : requested.startsWith("~/") ? join(os.homedir(), requested.slice(2)) : requested;
         if (!isAbsolute(path)) throw new CommandError("invalid_directory", "Use an absolute path or ~/path on this machine.");
         data = { repo: await registerRepository({ store: this.store, path }) };
+      } else if (cmd.kind === "unregister_repo") {
+        const parsed = UnregisterRepoArgsSchema.safeParse(cmd.args);
+        if (!parsed.success) throw new CommandError("invalid_repo", "A registered repo id is required.");
+        data = this.manager.unregisterRepo(parsed.data.repoId);
       } else {
         data = await this.manager.handleCommand(cmd.id, cmd.kind, cmd.args ?? {}, cmd.workerId);
       }

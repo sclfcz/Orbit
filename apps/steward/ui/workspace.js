@@ -40,6 +40,7 @@ const state = {
   modelDraft: null, // { provider, modelId, baseUrl, apiKey } being typed; kept out of the dialog's redraw signature
   passkeyLabelDraft: '', // ditto, for the new-passkey label field
   directoryForms: new Map(),
+  directoryRemovals: new Map(),
   setupChecked: false,
   initialDialog: null,
   settingsError: false,
@@ -726,6 +727,37 @@ async function browseDirectory(path) {
   }
 }
 
+function repositoryList(machine) {
+  const repos = machine.repositories ?? [];
+  if (repos.length === 0) return h('span', null, t('noneListed'));
+  const errorKey = (code) => ({
+    machine_offline: 'directoryRemoveOffline',
+    repo_worker_active: 'directoryRemoveActive',
+    repo_worker_recovering: 'directoryRemoveRecovering',
+    repo_queued_messages: 'directoryRemoveQueued',
+    repo_delivery_ambiguous: 'directoryRemoveAmbiguous',
+    repo_serial_queue_pending: 'directoryRemoveSerial',
+    outcome_unknown: 'directoryRemoveUnknown',
+  }[code] ?? 'directoryRemoveFailed');
+  return h('div', { class: 'repo-list' }, repos.map((repo) => {
+    const removal = state.directoryRemovals.get(repo.repoId);
+    const confirming = state.dialog?.repoConfirm?.machine === machine.id && state.dialog.repoConfirm.repoId === repo.repoId;
+    const removeLabel = removal?.state === 'pending' ? 'directoryRemoving' : 'directoryRemove';
+    return h('div', { class: 'repo-row' },
+      h('div', { class: 'repo-copy' }, h('strong', null, repo.name), h('code', null, repo.path)),
+      confirming
+        ? h('div', { class: 'repo-confirm' },
+          h('p', null, t('directoryRemoveConfirm', { name: repo.name })),
+          h('div', { class: 'dialog-actions' },
+            h('button', { type: 'button', class: 'button danger', dataset: { action: 'directory-remove-yes', machine: machine.id, repo: repo.repoId }, focus: `directory-remove-yes:${repo.repoId}` }, t('directoryRemoveConfirmAction')),
+            h('button', { type: 'button', class: 'button', dataset: { action: 'directory-remove-no', focus: `directory-remove-no:${repo.repoId}` } }, t('actionCancel'))))
+        : h('div', { class: 'repo-actions' },
+          removal?.state === 'failed' ? h('p', { class: 'directory-error', role: 'alert' }, t(errorKey(removal.code))) : null,
+          h('button', { type: 'button', class: 'button danger', disabled: !machine.online || removal?.state === 'pending', dataset: { action: 'directory-remove', machine: machine.id, repo: repo.repoId, focus: `directory-remove:${repo.repoId}` } },
+            t(removeLabel))));
+  }));
+}
+
 function machineCard(machine) {
   const work = workOn(state.snapshot, machine);
   const status = machine.revoked ? t('revoked') : machine.online ? t('online') : t('offline');
@@ -737,7 +769,7 @@ function machineCard(machine) {
     detail ? h('p', null, detail) : null,
     h('dl', null,
       h('div', null, h('dt', null, t('agents')), h('dd', null, machine.agents.join(', ') || t('noneListed'))),
-      h('div', null, h('dt', null, t('repositories')), h('dd', null, machine.repos.join(', ') || t('noneListed'))),
+      h('div', null, h('dt', null, t('repositories')), h('dd', null, repositoryList(machine))),
       work.length ? h('div', null, h('dt', null, t('running')), h('dd', null, work.map((entry) => entry.title).join(' · '))) : null),
     machine.revoked ? null : directoryForm(machine),
     machine.revoked ? null : confirming
@@ -1057,9 +1089,9 @@ function dialogContent() {
 /** Rebuilds the open dialog only when what it shows changed, so a typed key or a selected command survives a refresh. */
 function renderDialog() {
   if (!state.dialog) return;
-  const { type, rev = 0, pairing = null, confirm = null } = state.dialog;
+  const { type, rev = 0, pairing = null, confirm = null, repoConfirm = null } = state.dialog;
   const snapshot = state.snapshot;
-  const signature = [type, rev, getLocale(), pairing, confirm,
+  const signature = [type, rev, getLocale(), pairing, confirm, repoConfirm,
     type === 'machines' ? [snapshot.machines, snapshot.threads.map((entry) => [entry.id, entry.state, entry.workers.map((worker) => [worker.state, worker.machine])]), minuteBucket()] : null,
     type === 'directory' ? snapshot.machines : null,
     type === 'scope' ? [state.selected, snapshot.threads.map((entry) => [entry.id, entry.title, entry.state, entry.repos])] : null,
@@ -1083,7 +1115,7 @@ function bumpDialog() {
 }
 
 function openDialog(type) {
-  state.dialog = { type, rev: 0, pairing: null, confirm: null, passkeyAdd: null };
+  state.dialog = { type, rev: 0, pairing: null, confirm: null, repoConfirm: null, passkeyAdd: null };
   drawn.delete('dialog');
   if (type === 'account') void loadSettings();
   renderDialog();
@@ -1488,6 +1520,7 @@ async function createPairing() {
 }
 
 const directoryRequests = new Set();
+const directoryRemovalRequests = new Set();
 
 async function submitDirectory(deviceId, element) {
   const form = state.directoryForms.get(deviceId);
@@ -1536,6 +1569,55 @@ async function runDirectoryRegistration(deviceId, pending) {
     }
   } finally {
     directoryRequests.delete(deviceId);
+    bumpDialog();
+  }
+}
+
+async function removeDirectory(deviceId, repoId) {
+  const pending = { state: 'pending', request: { id: uuid(), deviceId, repoId }, startedAt: Date.now() };
+  state.directoryRemovals.set(repoId, pending);
+  if (state.dialog?.repoConfirm) state.dialog.repoConfirm = null;
+  bumpDialog();
+  await runDirectoryRemoval(pending);
+}
+
+async function runDirectoryRemoval(pending) {
+  const repoId = pending.request.repoId;
+  if (directoryRemovalRequests.has(repoId)) return;
+  directoryRemovalRequests.add(repoId);
+  try {
+    while (state.directoryRemovals.get(repoId) === pending && state.dialog?.type === 'machines' && !state.fatal) {
+      let response;
+      try {
+        response = await request('/app/api/machines/directories/remove', pending.request);
+      } catch {
+        state.directoryRemovals.set(repoId, { ...pending, state: 'failed', code: 'outcome_unknown' });
+        break;
+      }
+      if (state.directoryRemovals.get(repoId) !== pending) return;
+      const { status, data } = response;
+      if (status === 200 && data?.state === 'done') {
+        state.directoryRemovals.delete(repoId);
+        await refresh();
+        toast(t('directoryRemoved'));
+        break;
+      }
+      if (status === 200 && data?.state === 'failed') {
+        state.directoryRemovals.set(repoId, { ...pending, state: 'failed', code: data.code });
+        break;
+      }
+      if (status !== 202 || data?.state !== 'pending') {
+        state.directoryRemovals.set(repoId, { ...pending, state: 'failed', code: data?.error });
+        break;
+      }
+      if (Date.now() - pending.startedAt > 125_000) {
+        state.directoryRemovals.set(repoId, { ...pending, state: 'failed', code: 'outcome_unknown' });
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  } finally {
+    directoryRemovalRequests.delete(repoId);
     bumpDialog();
   }
 }
@@ -1921,6 +2003,14 @@ document.addEventListener('click', (event) => {
       if (state.dialog?.type === 'directory') return closeDialog();
       state.directoryForms.delete(dataset.machine);
       return bumpDialog();
+    case 'directory-remove':
+      state.dialog.repoConfirm = { machine: dataset.machine, repoId: dataset.repo };
+      return bumpDialog();
+    case 'directory-remove-no':
+      state.dialog.repoConfirm = null;
+      return bumpDialog();
+    case 'directory-remove-yes':
+      return void removeDirectory(dataset.machine, dataset.repo);
     case 'revoke':
       state.dialog.confirm = dataset.machine;
       return bumpDialog();
