@@ -18,6 +18,7 @@ import { adjudicate, type RunWindow } from "./adjudication.ts";
 import { normalizeSessionEntries } from "./session-history.ts";
 import { observeSession } from "./session-observation.ts";
 import { installAssets, type InstalledAssets } from "./install.ts";
+import { spawnSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { PiProcess } from "./pi-process.ts";
@@ -564,4 +565,33 @@ export function extractTarget(args: unknown): string | undefined {
     if (typeof value === "string" && value.length > 0) return value.slice(0, 80);
   }
   return undefined;
+}
+
+export const PI_NOT_FOUND = "pi not found on PATH";
+
+/** Probe only CLI metadata (`pi --version`), with a bounded timeout; never starts a session.
+ *  `env` replaces the inherited environment — doctor passes the installed service's PATH.
+ *  A missing binary (ENOENT, including a dangling link left by an interrupted global
+ *  install) is "not found"; a binary that runs but fails is reported with its exit/stderr. */
+export function detectPi(
+  command: string[] = ["pi"],
+  env?: NodeJS.ProcessEnv,
+): { installed: boolean; version?: string; diagnostic?: string } {
+  const result = spawnSync(command[0]!, [...command.slice(1), "--version"], {
+    encoding: "utf8",
+    timeout: 5000,
+    ...(env ? { env } : {}),
+  });
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return { installed: false, diagnostic: PI_NOT_FOUND };
+    return { installed: false, diagnostic: code === "ETIMEDOUT" ? "pi --version timed out" : `pi --version failed: ${result.error.message}` };
+  }
+  if (result.status !== 0) {
+    const reason = String(result.stderr ?? "").trim().split("\n")[0] ?? "";
+    const exit = result.status === null ? `killed by ${result.signal}` : `exited ${result.status}`;
+    return { installed: false, diagnostic: `pi --version ${exit}${reason ? `: ${reason.slice(0, 200)}` : ""}` };
+  }
+  const version = String(result.stdout ?? "").trim().split("\n")[0] ?? "";
+  return { installed: true, version: version.length > 0 ? version : undefined };
 }

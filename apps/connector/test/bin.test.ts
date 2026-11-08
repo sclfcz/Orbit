@@ -2,7 +2,7 @@
 // builds. This is the `npx @sclfcz/orbit` surface: the Node gate, --version, usage, and
 // the read-only subcommands on a clean SIG_HOME.
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -65,6 +65,14 @@ function fakeCodexBin(version?: string): string {
   const fake = join(import.meta.dirname, "fake-codex.mjs");
   const pin = version ? ` --fake-version="codex-cli ${version}"` : "";
   writeFileSync(join(dir, "codex"), `#!/bin/sh\nexec "${process.execPath}" "${fake}" "$@"${pin}\n`, { mode: 0o755 });
+  return dir;
+}
+
+/** A `pi` executable that answers `--version` like the real CLI; `exitCode` makes it fail. */
+function fakePiBin(dir = join(home, "pi-bin"), exitCode = 0): string {
+  mkdirSync(dir, { recursive: true });
+  const body = exitCode === 0 ? "echo 1.2.0" : `echo "Error: Cannot find module 'dist/bundle/cli.js'" >&2\nexit ${exitCode}`;
+  writeFileSync(join(dir, "pi"), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
   return dir;
 }
 
@@ -185,6 +193,58 @@ describe("bin/orbit.js (skipped when dist has not been built)", () => {
     expect(res.stdout).toContain("not paired");
   });
 
+  it("doctor reports pi for this shell and for the installed service PATH", async () => {
+    const binPath = fakePiBin();
+    seedServicePath(binPath);
+    const res = await run(["doctor"], { PATH: binPath });
+
+    expect(res.stdout).toMatch(/pi \(this shell\):\s+1\.2\.0/);
+    expect(res.stdout).toMatch(/pi \(service PATH\):\s+1\.2\.0/);
+    expect(res.stdout).not.toContain("pi-coding-agent");
+    expect(res.stdout).not.toContain("orbit upgrade");
+  });
+
+  it("doctor explains how to install a missing pi", async () => {
+    // An interrupted global install leaves a dangling `pi` link: spawn sees ENOENT.
+    const empty = join(home, "no-pi");
+    mkdirSync(empty);
+    symlinkSync(join(home, "gone", "cli.js"), join(empty, "pi"));
+    seedServicePath(empty);
+    const res = await run(["doctor"], { PATH: empty });
+
+    expect(res.stdout).toMatch(/pi \(this shell\):\s+not found/);
+    expect(res.stdout).toMatch(/pi \(service PATH\):\s+not found/);
+    expect(res.stdout).toContain("pi (the default agent) is not on this shell's PATH");
+    expect(res.stdout).toContain("`npm install -g @earendil-works/pi-coding-agent`");
+    expect(res.stdout).toContain(`once \`pi --version\` works here, run \`orbit upgrade --version ${VERSION}\` from this shell`);
+  });
+
+  it("doctor explains how to refresh a service PATH that misses pi", async () => {
+    const binPath = fakePiBin();
+    const empty = join(home, "empty-path");
+    mkdirSync(empty);
+    seedServicePath(empty);
+    const res = await run(["doctor"], { PATH: binPath });
+
+    expect(res.stdout).toMatch(/pi \(this shell\):\s+1\.2\.0/);
+    expect(res.stdout).toMatch(/pi \(service PATH\):\s+not found/);
+    expect(res.stdout).toContain(
+      `pi works in this shell but not on the installed service PATH — if it was installed after the service, run \`orbit upgrade --version ${VERSION}\` from this shell`,
+    );
+    expect(res.stdout).not.toContain("pi-coding-agent");
+  });
+
+  it("doctor reports a pi that is on PATH but does not run", async () => {
+    const binPath = fakePiBin(join(home, "broken-pi"), 1);
+    seedServicePath(binPath);
+    const res = await run(["doctor"], { PATH: binPath });
+
+    expect(res.stdout).toMatch(/pi \(this shell\):\s+broken — pi --version exited 1: Error: Cannot find module/);
+    expect(res.stdout).toMatch(/pi \(service PATH\):\s+broken — pi --version exited 1/);
+    expect(res.stdout).toContain("pi is on this shell's PATH but does not run");
+    expect(res.stdout).toContain("`npm install -g @earendil-works/pi-coding-agent`");
+  });
+
   it("doctor reports Codex for this shell and for the installed service PATH", async () => {
     const binPath = fakeCodexBin();
     seedServicePath(binPath);
@@ -192,7 +252,7 @@ describe("bin/orbit.js (skipped when dist has not been built)", () => {
 
     expect(res.stdout).toMatch(/codex \(this shell\):\s+codex-cli 0\.166\.0-alpha\.6/);
     expect(res.stdout).toMatch(/codex \(service PATH\):\s+codex-cli 0\.166\.0-alpha\.6/);
-    expect(res.stdout).not.toContain("orbit upgrade");
+    expect(res.stdout).not.toContain("codex works in this shell but not on the installed service PATH");
   });
 
   it("doctor explains how to refresh a service PATH that misses Codex", async () => {
@@ -218,7 +278,7 @@ describe("bin/orbit.js (skipped when dist has not been built)", () => {
     expect(res.stdout).toMatch(/codex \(service PATH\):\s+incompatible — Unsupported Codex CLI protocol: codex-cli 0\.168\.0/);
   });
 
-  it("doctor readiness and exit code do not depend on Codex", async () => {
+  it("doctor readiness and exit code do not depend on Codex or pi", async () => {
     await withReachableSteward(async (url) => {
       seedCredentials(url);
       const binPath = fakeCodexBin();
@@ -234,6 +294,7 @@ describe("bin/orbit.js (skipped when dist has not been built)", () => {
       expect(withoutCodex.code).toBe(withCodex.code);
       expect(withoutCodex.stdout).toMatch(/codex \(this shell\):\s+not found/);
       expect(withoutCodex.stdout).toMatch(/codex \(service PATH\):\s+not found/);
+      expect(withoutCodex.stdout).toMatch(/pi \(this shell\):\s+not found/);
     });
   });
 
