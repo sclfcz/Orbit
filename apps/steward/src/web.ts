@@ -270,6 +270,7 @@ export interface WebDeps {
     | "pairing"
     | "revoke"
     | "addDirectory"
+    | "removeDirectory"
     | "browseDirectory"
     | "webauthnRegisterOptions"
     | "webauthnRegisterVerify"

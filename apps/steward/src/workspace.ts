@@ -275,8 +275,13 @@ export function workspaceSnapshot(input: { ledger: Ledger; budget: BudgetState; 
   const view = ledger.views.workspace();
   const machineName = new Map(devices.map((device) => [device.deviceId, device.name]));
   const repoNamesByMachine = new Map<string, string[]>();
+  const repositoriesByMachine = new Map<string, Array<{ repoId: string; name: string; path: string }>>();
   for (const repo of view.repos) {
     repoNamesByMachine.set(repo.deviceId, [...(repoNamesByMachine.get(repo.deviceId) ?? []), repo.name]);
+    repositoriesByMachine.set(repo.deviceId, [
+      ...(repositoriesByMachine.get(repo.deviceId) ?? []),
+      { repoId: repo.repoId, name: repo.name, path: repo.path },
+    ]);
   }
   const repoName = new Map(view.repos.map((repo) => [repo.repoId, repo.name]));
   const ledgerMachines = new Map(view.machines.map((machine) => [machine.deviceId, machine]));
@@ -367,6 +372,7 @@ export function workspaceSnapshot(input: { ledger: Ledger; budget: BudgetState; 
         agents: machine?.agents ?? [],
         slots: machine ? { running: machine.running, max: machine.maxWorkers } : null,
         repos: repoNamesByMachine.get(device.deviceId) ?? [],
+        repositories: repositoriesByMachine.get(device.deviceId) ?? [],
       };
     }),
     messages,

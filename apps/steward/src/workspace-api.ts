@@ -6,7 +6,15 @@
 import { isThinkingLevel, type ComposerModelInput, type ModelSwitchInput } from "./llm/models.ts";
 import type { ConnectionTestResult } from "./llm/connection-test.ts";
 import type { BudgetState } from "./budget.ts";
-import { DirectoryBrowseArgsSchema, RegisterRepoArgsSchema, type DirectoryBrowseArgs, type DirectoryListing, type RegisterRepoResult } from "@alexlikevibe/protocol";
+import {
+  DirectoryBrowseArgsSchema,
+  RegisterRepoArgsSchema,
+  UnregisterRepoArgsSchema,
+  type DirectoryBrowseArgs,
+  type DirectoryListing,
+  type RegisterRepoResult,
+  type UnregisterRepoResult,
+} from "@alexlikevibe/protocol";
 import type { Ledger } from "./ledger.ts";
 import {
   WorkspaceError,
@@ -27,6 +35,17 @@ export type MachineDirectoryBrowseInput = DirectoryBrowseArgs & { deviceId: stri
 export type MachineDirectoryResult =
   | { state: "pending"; id: string }
   | { state: "done"; id: string; repo: RegisterRepoResult["repo"] }
+  | { state: "failed"; id: string; code: string };
+
+export interface MachineDirectoryRemovalInput {
+  id: string;
+  deviceId: string;
+  repoId: string;
+}
+
+export type MachineDirectoryRemovalResult =
+  | { state: "pending"; id: string }
+  | { state: "done"; id: string; repoId: UnregisterRepoResult["repoId"] }
   | { state: "failed"; id: string; code: string };
 
 export interface WorkspaceApiDeps {
@@ -50,6 +69,7 @@ export interface WorkspaceApiDeps {
   pairing?(id: string): Promise<{ code: string; expiresAt: number }>;
   revoke?(deviceId: string): void;
   addDirectory?(input: MachineDirectoryInput): Promise<MachineDirectoryResult>;
+  removeDirectory?(input: MachineDirectoryRemovalInput): Promise<MachineDirectoryRemovalResult>;
   browseDirectory?(input: MachineDirectoryBrowseInput, signal: AbortSignal): Promise<DirectoryListing>;
   /** `attestation`/the WebAuthn wire fields stay `unknown` here on purpose (synthesis graft 1):
    *  only webauthn.ts's verifyRegistrationResponse/verifyAssertionResponse ever assert their
@@ -210,6 +230,16 @@ export async function handleWorkspaceApi(request: Request, url: URL, session: Ap
       const args = RegisterRepoArgsSchema.safeParse({ path });
       if (!args.success) throw new WorkspaceError("bad_request");
       const result = await deps.addDirectory({ id, deviceId, path: args.data.path });
+      return json(result, result.state === "pending" ? 202 : 200);
+    }
+    if (url.pathname === "/app/api/machines/directories/remove" && deps.removeDirectory) {
+      const { id, deviceId, repoId } = await readJson(request);
+      if (typeof id !== "string" || !REQUEST_ID.test(id) || typeof deviceId !== "string" || !/^[\w-]{1,128}$/.test(deviceId)) {
+        throw new WorkspaceError("bad_request");
+      }
+      const args = UnregisterRepoArgsSchema.safeParse({ repoId });
+      if (!args.success) throw new WorkspaceError("bad_request");
+      const result = await deps.removeDirectory({ id, deviceId, repoId: args.data.repoId });
       return json(result, result.state === "pending" ? 202 : 200);
     }
     if (url.pathname === "/app/api/machines/directories/browse" && deps.browseDirectory) {

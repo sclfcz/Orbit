@@ -388,6 +388,34 @@ export class WorkerManager {
     }
   }
 
+  unregisterRepo(repoId: string): { repoId: string } {
+    if (!this.store.getRepo(repoId)) return { repoId };
+    const workers = this.store.listWorkers().filter((worker) => worker.repoId === repoId);
+    if (workers.some((worker) => worker.state === "starting" || worker.state === "running")) {
+      throw new CommandError("repo_worker_active", `repo '${repoId}' has an active worker`);
+    }
+    if (workers.some((worker) => worker.state === "recovering" || worker.state === "lost")) {
+      throw new CommandError("repo_worker_recovering", `repo '${repoId}' has a worker awaiting recovery`);
+    }
+    if (workers.some((worker) => worker.state === "queued")) {
+      throw new CommandError("repo_serial_queue_pending", `repo '${repoId}' has a queued write worker`);
+    }
+    for (const worker of workers) {
+      const deferred = this.store.deferred(worker.workerId);
+      const ambiguous = worker.lastOutcome === "delivery_ambiguous" ||
+        this.store.deliveries(worker.workerId).some((delivery) => delivery.state === "sending") ||
+        deferred.some((send) => send.state === "ambiguous" || send.state === "sending");
+      if (ambiguous) {
+        throw new CommandError("repo_delivery_ambiguous", `repo '${repoId}' has uncertain worker delivery`);
+      }
+      if (deferred.some((send) => send.state === "queued" || send.state === "returning")) {
+        throw new CommandError("repo_queued_messages", `repo '${repoId}' has queued follow-up messages`);
+      }
+    }
+    this.store.removeRepo(repoId);
+    return { repoId };
+  }
+
   async startWorker(commandId: string, args: StartWorkerArgs): Promise<StartWorkerResult> {
     // Command dedup (§6.3) is the transport's job: ConnectorClient's CommandLog answers
     // redeliveries with `duplicate` and calls this handler only for unseen commandIds.
@@ -1007,6 +1035,9 @@ export class WorkerManager {
     }
     if (worker.state === "broken" || worker.agent === "codex" && worker.lastOutcome === "delivery_ambiguous") {
       throw new CommandError("broken_worker", `worker ${args.workerId} is broken and needs a human decision`);
+    }
+    if (!this.store.getRepo(worker.repoId)) {
+      throw new CommandError("not_registered_repo", `repo '${worker.repoId}' is not registered on this machine`);
     }
     // §3 gate (PR #59 review finding 2): the images check is NOT start_worker-only — every
     // delivery path (steer, follow-up, deferral, hot prompt, cold relaunch) would otherwise
@@ -1744,6 +1775,9 @@ export class WorkerManager {
     if (!worker) throw new CommandError("not_found", `worker ${workerId} is unknown on this machine`);
     const adapter = this.adapterOfWorker(worker);
     this.guardDelivery(worker);
+    if (!this.store.getRepo(worker.repoId)) {
+      throw new CommandError("not_registered_repo", `repo '${worker.repoId}' is not registered on this machine`);
+    }
     if (this.stopRequested.delete(workerId)) throw new CommandError("aborted", "worker was stopped before resume");
     if (worker.state === "queued") {
       // §8.2: a queued write worker has no session yet — there is nothing to resume. It

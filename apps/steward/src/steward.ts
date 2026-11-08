@@ -43,6 +43,7 @@ import {
   PingMessageSchema,
   PROTOCOL_VERSION,
   RegisterRepoResultSchema,
+  UnregisterRepoResultSchema,
   SubscribeMessageSchema,
   UnsubscribeMessageSchema,
   WorkerCmdMessageSchema,
@@ -125,7 +126,13 @@ import { MIGRATIONS, runMigrations } from "./schema.ts";
 import { openSecret, sealSecret } from "./secretbox.ts";
 import { ambiguousWakeText, commandAttentionWakeText, escapeMarkers, verifyWakeText } from "./wake-text.ts";
 import { WorkspaceError, cardOpen, cardView, type WorkspaceActionInput, type WorkspaceInput } from "./workspace.ts";
-import type { MachineDirectoryBrowseInput, MachineDirectoryInput, MachineDirectoryResult } from "./workspace-api.ts";
+import type {
+  MachineDirectoryBrowseInput,
+  MachineDirectoryInput,
+  MachineDirectoryRemovalInput,
+  MachineDirectoryRemovalResult,
+  MachineDirectoryResult,
+} from "./workspace-api.ts";
 import { WorkspaceStream } from "./workspace-stream.ts";
 import { WebApp, linkTargetForThread, loginLinkPolicyFromEnv, parseSessionCookie, verifyLinkToken } from "./web.ts";
 
@@ -788,6 +795,7 @@ export class Steward extends Agent<Env> {
         pairing: (id: string) => this.webPairing(id),
         revoke: (id: string) => { this.logChannel("web_machine_revoked", id); void this.revoke(id); },
         addDirectory: (input) => this.addMachineDirectory(input),
+        removeDirectory: (input) => this.removeMachineDirectory(input),
         browseDirectory: (input, signal) => this.browseMachineDirectory(input, signal),
         webauthnRegisterOptions: (sid: string, rpId: string) => this.web.webauthnRegisterOptions(sid, rpId),
         webauthnRegisterVerify: (sid: string, rpId: string, origin: string, label: string, attestation: unknown) =>
@@ -1843,6 +1851,7 @@ export class Steward extends Agent<Env> {
     } else if (ack.status === "duplicate") {
       if (ack.result) {
         if (row.kind === "register_repo") return this.settleDirectoryRegistration(row, ack.result);
+        if (row.kind === "unregister_repo") return this.settleDirectoryRemoval(row, ack.result);
         this.sql`
           UPDATE outbox SET state = ${ack.result.ok ? "done" : "failed"}, result = ${JSON.stringify(ack.result)}
           WHERE cmdId = ${ack.re}
@@ -1854,6 +1863,7 @@ export class Steward extends Agent<Env> {
       }
     } else if (ack.status === "rejected") {
       if (row.kind === "register_repo") return this.settleDirectoryRegistration(row, { ok: false, error: { code: ack.code ?? "registration_failed" } });
+      if (row.kind === "unregister_repo") return this.settleDirectoryRemoval(row, { ok: false, error: { code: ack.code ?? "unregistration_failed" } });
       this.sql`
         UPDATE outbox SET state = 'failed', failReason = 'rejected', result = ${JSON.stringify({ code: ack.code ?? null })}
         WHERE cmdId = ${ack.re}
@@ -1876,6 +1886,7 @@ export class Steward extends Agent<Env> {
     const command = this.sql<OutboxRow>`SELECT * FROM outbox WHERE cmdId = ${result.re}`[0];
     if (!command || command.deviceId !== deviceId) return;
     if (command.kind === "register_repo") return this.settleDirectoryRegistration(command, result);
+    if (command.kind === "unregister_repo") return this.settleDirectoryRemoval(command, result);
     const wasFailed = this.sql<{ state: string }>`SELECT state FROM outbox WHERE cmdId = ${result.re}`[0]?.state === "failed";
     this.sql`
       UPDATE outbox SET state = ${result.ok ? "done" : "failed"}, result = ${JSON.stringify(result.ok ? result.data ?? null : result.error ?? null)}
@@ -1925,6 +1936,27 @@ export class Steward extends Agent<Env> {
       const error = result.error;
       const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "registration_failed";
       this.sql`UPDATE outbox SET state = 'failed', result = ${JSON.stringify({ code })}, failReason = 'registration_failed' WHERE cmdId = ${row.cmdId}`;
+    }
+  }
+
+  private settleDirectoryRemoval(row: OutboxRow, result: CmdResult): void {
+    if (row.state === "done" || row.state === "expired" || row.state === "ambiguous" || (row.state === "failed" && row.failReason !== "ack_timeout")) return;
+    const parsed = UnregisterRepoResultSchema.safeParse(result.data);
+    const requested = (() => {
+      try {
+        const value = JSON.parse(row.payload) as { repoId?: unknown };
+        return typeof value.repoId === "string" ? value.repoId : null;
+      } catch {
+        return null;
+      }
+    })();
+    if (result.ok && parsed.success && requested === parsed.data.repoId) {
+      this.ledger.repos.removeRegistration(row.deviceId, parsed.data.repoId);
+      this.sql`UPDATE outbox SET state = 'done', result = ${JSON.stringify(parsed.data)}, failReason = NULL WHERE cmdId = ${row.cmdId}`;
+    } else {
+      const error = result.error;
+      const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "unregistration_failed";
+      this.sql`UPDATE outbox SET state = 'failed', result = ${JSON.stringify({ code })}, failReason = 'unregistration_failed' WHERE cmdId = ${row.cmdId}`;
     }
   }
 
@@ -2556,6 +2588,37 @@ export class Steward extends Agent<Env> {
     if (row.failReason === "not_after") return { state: "failed", id: input.id, code: "outcome_unknown" };
     if (row.state === "failed" && row.failReason !== "ack_timeout") {
       const code = stored !== null && typeof stored === "object" && "code" in stored && typeof stored.code === "string" ? stored.code : "registration_failed";
+      return { state: "failed", id: input.id, code };
+    }
+    if (row.state === "ambiguous" || row.state === "expired" || (row.notAfter !== null && row.notAfter <= Date.now())) {
+      return { state: "failed", id: input.id, code: "outcome_unknown" };
+    }
+    return { state: "pending", id: input.id };
+  }
+
+  private async removeMachineDirectory(input: MachineDirectoryRemovalInput): Promise<MachineDirectoryRemovalResult> {
+    const cmdId = `web-directory-remove:${input.id}`;
+    const payload = JSON.stringify({ repoId: input.repoId });
+    const previous = this.sql<OutboxRow>`SELECT * FROM outbox WHERE cmdId = ${cmdId}`[0];
+    if (previous && (previous.deviceId !== input.deviceId || previous.kind !== "unregister_repo" || previous.payload !== payload)) {
+      throw new WorkspaceError("id_conflict", 409);
+    }
+    const device = this.sql<{ revoked: number }>`SELECT revoked FROM device WHERE deviceId = ${input.deviceId}`[0];
+    if (!device || device.revoked) throw new WorkspaceError("not_found", 404);
+    if (!previous) {
+      if (!this.connFor(input.deviceId)) throw new WorkspaceError("machine_offline", 409);
+      await this.enqueue(input.deviceId, "unregister_repo", { repoId: input.repoId }, { cmdId, notAfter: Date.now() + 120_000 });
+      this.logChannel("web_directory_removal_requested", input.deviceId);
+    }
+    const row = this.sql<OutboxRow>`SELECT * FROM outbox WHERE cmdId = ${cmdId}`[0]!;
+    const stored: unknown = row.result ? JSON.parse(row.result) : null;
+    if (row.state === "done") {
+      const parsed = UnregisterRepoResultSchema.safeParse(stored);
+      return parsed.success ? { state: "done", id: input.id, repoId: parsed.data.repoId } : { state: "failed", id: input.id, code: "unregistration_failed" };
+    }
+    if (row.failReason === "not_after") return { state: "failed", id: input.id, code: "outcome_unknown" };
+    if (row.state === "failed" && row.failReason !== "ack_timeout") {
+      const code = stored !== null && typeof stored === "object" && "code" in stored && typeof stored.code === "string" ? stored.code : "unregistration_failed";
       return { state: "failed", id: input.id, code };
     }
     if (row.state === "ambiguous" || row.state === "expired" || (row.notAfter !== null && row.notAfter <= Date.now())) {

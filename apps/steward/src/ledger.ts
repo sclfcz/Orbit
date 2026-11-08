@@ -692,6 +692,9 @@ export function createLedger(deps: LedgerDeps) {
 
   const repos = {
     recordRegistration: recordRepository,
+    removeRegistration(deviceId: string, repoId: string): void {
+      sql`DELETE FROM sh_repo WHERE deviceId = ${deviceId} AND repoId = ${repoId}`;
+    },
     /** Machines that have a repo matching `ref` by name or exact repoId (routing signal 2). */
     machinesHaving(ref: string): { deviceId: string; repoId: string; repoName: string }[] {
       return sql<{ deviceId: string; repoId: string; repoName: string }>`
@@ -701,9 +704,9 @@ export function createLedger(deps: LedgerDeps) {
       `;
     },
     /** All registered repos (the brief's repos line, issue #7). */
-    list(): Array<{ repoId: string; deviceId: string; name: string; online: boolean }> {
-      return sql<{ repoId: string; deviceId: string; name: string; online: boolean }>`
-        SELECT r.repoId, r.deviceId, r.name, COALESCE(m.online, 0) AS online
+    list(): Array<{ repoId: string; deviceId: string; name: string; path: string; online: boolean }> {
+      return sql<{ repoId: string; deviceId: string; name: string; path: string; online: boolean }>`
+        SELECT r.repoId, r.deviceId, r.name, r.path, COALESCE(m.online, 0) AS online
         FROM sh_repo r LEFT JOIN sh_machine m ON m.deviceId = r.deviceId
         ORDER BY r.name, r.repoId
       `;

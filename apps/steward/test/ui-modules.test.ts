@@ -75,6 +75,21 @@ describe("shipped files", () => {
     for (const name of new Set([...script.matchAll(/\/app\/assets\/([\w.-]+)/g)].map((match) => match[1]!))) await fetchAsset(name);
   });
 
+  it("renders a confirmation-backed remove control for each registered directory", async () => {
+    const source = await asset("workspace.js");
+    expect(source).toContain("function repositoryList(machine)");
+    expect(source).toContain("unsupported_command: 'directoryUnsupported'");
+    expect(source).toContain("action: 'directory-remove'");
+    expect(source).toContain("action: 'directory-remove-yes'");
+    expect(source).toContain("t('directoryRemoveConfirm'");
+    expect(source).toContain("disabled: !machine.online || removal?.state === 'pending'");
+    expect(source).toContain("for (const removal of state.directoryRemovals.values())");
+    expect(source).toContain("void runDirectoryRemoval(removal)");
+    const css = await asset("workspace.css");
+    expect(css).toContain(".repo-row");
+    expect(css).toContain(".repo-actions");
+  });
+
   // workspace.js and session.js touch the DOM and cannot be loaded here, so a name imported from a
   // sibling that does not export it would only fail when a browser first opens the page.
   it("import only names their sibling modules really export", async () => {

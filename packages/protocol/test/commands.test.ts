@@ -1,5 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { CmdAckMessageSchema, CmdMessageSchema, CmdResultMessageSchema } from "../src/commands.ts";
+import {
+  CmdAckMessageSchema,
+  CmdMessageSchema,
+  CmdResultMessageSchema,
+  UnregisterRepoArgsSchema,
+  UnregisterRepoResultSchema,
+} from "../src/commands.ts";
+
+describe("unregister_repo schemas", () => {
+  it("accepts a canonical non-empty repo id and rejects malformed arguments", () => {
+    expect(UnregisterRepoArgsSchema.safeParse({ repoId: "/srv/project" }).success).toBe(true);
+    expect(UnregisterRepoArgsSchema.safeParse({ repoId: "" }).success).toBe(false);
+    expect(UnregisterRepoArgsSchema.safeParse({ repoId: "bad\0id" }).success).toBe(false);
+    expect(UnregisterRepoArgsSchema.safeParse({ repoId: "/srv/project", extra: true }).success).toBe(false);
+    expect(UnregisterRepoResultSchema.safeParse({ repoId: "/srv/project" }).success).toBe(true);
+    expect(UnregisterRepoResultSchema.safeParse({ repoId: "" }).success).toBe(false);
+    expect(UnregisterRepoResultSchema.safeParse({ repoId: "bad\0id" }).success).toBe(false);
+  });
+});
 
 describe("CmdMessageSchema", () => {
   it("accepts a well-formed cmd", () => {

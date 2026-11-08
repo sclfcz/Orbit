@@ -11,6 +11,16 @@ export const RegisterRepoResultSchema = z.object({
 });
 export type RegisterRepoResult = z.infer<typeof RegisterRepoResultSchema>;
 
+export const UnregisterRepoArgsSchema = z.strictObject({
+  repoId: z.string().min(1).max(4096).regex(/^[^\0]+$/),
+});
+export type UnregisterRepoArgs = z.infer<typeof UnregisterRepoArgsSchema>;
+
+export const UnregisterRepoResultSchema = z.object({
+  repoId: z.string().min(1).max(4096).regex(/^[^\0]+$/),
+});
+export type UnregisterRepoResult = z.infer<typeof UnregisterRepoResultSchema>;
+
 export const CmdMessageSchema = z.object({
   t: z.literal("cmd"),
   id: z.string(),
