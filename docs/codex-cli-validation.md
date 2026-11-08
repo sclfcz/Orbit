@@ -1,8 +1,8 @@
 # Codex CLI implementation validation — 2026-11-07
 
-Overall: **package regressions, local browser workflow, cold continuation, and clean readonly execution through both the adapter and Connector manager path pass locally**. Real-CLI evidence covers worktree writes, structured reports, steer, interruption with shell cleanup, local history, Connector restart, and uncertain-crash no-replay recovery. Manager-level cold continuation succeeds while an unrelated real app-server remains alive; same-thread competing writers are refused before input. Readonly acceptance uses a separately authenticated clean Codex home; inherited external integrations remain rejected.
+Overall: **package regressions, local browser workflow, cold continuation, clean readonly execution through both the adapter and Connector manager path, and deployed staging acceptance pass**. Real-CLI evidence covers worktree writes, structured reports, steer, interruption with shell cleanup, local history, Connector restart, networking recovery, and uncertain-crash no-replay recovery. Manager-level cold continuation succeeds while an unrelated real app-server remains alive; same-thread competing writers are refused before input. Readonly acceptance uses a separately authenticated clean Codex home; inherited external integrations remain rejected.
 
-This public record contains aggregate results and reproducible test names. Raw session records, machine identifiers, local paths, credentials and detailed process evidence remain local. The owner authorized committing and pushing verified source to a feature branch; deployment and merging main are outside this task.
+This public record contains aggregate results and reproducible test names. Raw session records, machine identifiers, local paths, credentials and detailed process evidence remain local. The owner merged the feature into main on 2026-11-07 and separately authorized the staging deployment below; the production deployment and npm release have not been performed.
 
 ## Final checks
 
@@ -21,6 +21,7 @@ This public record contains aggregate results and reproducible test names. Raw s
 | Independent npm CLI `0.167.0`: both real acceptance files, sequential | **6 passed**, 193.93 s; includes safe readonly refusal, not a clean readonly model run |
 | Clean-home readonly model acceptance, npm CLI `0.167.0` | **1 passed**, 5 deselected; 40.59 s; actual read, correlated write denial and structured report |
 | Clean-home readonly through Connector/WS manager path, npm CLI `0.167.0` | **1 passed**, 1 skipped; 18.58 s; default home refused before model input |
+| Deployed Cloudflare staging acceptance, new and old Connector compatibility | Passed; all required Codex and Pi scenarios completed |
 | Adapter regressions and default live-test gating after readonly addition | **27 passed, 6 skipped**, 6.12 s; Connector typecheck passed |
 | `pnpm typecheck` | All workspace packages passed after the cold-continuation fix |
 | `git diff --check` | Passed |
@@ -102,6 +103,24 @@ The managed-path acceptance then passed through a real Connector subprocess, `Wo
 
 A later adapter-level rerun after extracting the shared native-rollout helper stopped at the account usage limit before model completion (`usage_limit_exceeded`). It is not counted as a pass; the managed-path test exercised the same helper successfully, and the earlier adapter-level clean-home result above remains separately recorded.
 
+## Deployed staging acceptance — 2026-11-08
+
+An isolated Cloudflare staging Worker was deployed from the pre-Codex main commit and then from the feature branch. The Owner configured the browser password and model key directly; no secret or pairing code transited the agent. The formal Worker was not deployed, modified, or used by this acceptance.
+
+- Both versions returned the expected unauthenticated gates: `/app` `200`, `/api/messages` `401`.
+- Between the two deployed versions, only browser UI assets changed (Codex session rendering and the `Codex` label). The Steward server and protocol code are identical, so the compatibility results below do not depend on whether the Steward or the npm package ships first.
+- The acceptance machine's PATH resolved `codex` to the independently installed `codex-cli 0.167.0`. The Machines page lists agent names but not versions, so the advertised version was not captured separately.
+- New Connector (built from the feature branch; its package version is still `0.1.3` until the release bump) connected to the old Steward and received `welcome`. The old Steward accepted the extra `codex` capability advertisement, and a Pi task completed with the exact expected file bytes.
+- Old npm Connector `0.1.3` connected to the new Steward and reported only `pi, claude-code` capabilities; Codex was correctly absent. Its Pi task also completed with the exact expected file bytes.
+- Pi `1.2.0` came from the repository's devDependency in both compatibility runs. An initial Pi launch failed with `spawn pi ENOENT` because that directory was not on the foreground Connector's PATH; restarting with the repository `node_modules/.bin` on PATH fixed the test environment. It was not a product failure.
+- An explicitly requested Codex write task ran in an isolated worktree, returned a structured `done` report, wrote the exact expected bytes, and left the registered repository checkout clean.
+- A second Codex task started a 120-second shell. Steer was delivered to the active turn, interruption settled the worker as `aborted`, the started marker remained, and no finish file appeared after the original deadline.
+- Cold continuation reused the same worker and native thread/session identity and produced a new structured `done` report. The workspace session view grew from 46 to 75 entries.
+- Restarting the foreground Connector with the same isolated state retained the worker state and the 75-entry session view. No new start, report, or settle events were emitted for the completed worker.
+- A controlled network outage used a local HTTP proxy with WebSocket upgrade forwarding. Removing it produced repeated `1006` closes; restoring it produced `welcome` again. No command was replayed and the completed worker remained `idle/reported`.
+- A default-home Codex readonly task was rejected with `unsupported_capability` before model input; the UI displayed the inherited-external-tools explanation. The corresponding worker had no Codex session identity.
+- Acceptance Connectors were stopped, both test machine registrations were revoked, the temporary old-version worktree was removed, and the staging Worker was retained for Owner cleanup.
+
 ## Fault regressions and acceptance repairs
 
 Adapter regressions cover fragmented/early/duplicate notifications, strict report validation, terminal-then-exit deduplication, failed-spawn cleanup, inherited environment preservation, known request-validation rejections versus uncertain server errors, owned descendant cleanup, and large identity headers. The focused adapter/header run passed 26 tests.
@@ -118,8 +137,8 @@ The original implementation snapshot had 426 Connector passes, 11 stale-bin fail
 
 - `0.166.0-alpha.6` from the desktop bundle and independently installed `0.167.0` were live-tested. Discovery accepts the narrow 0.166/0.167 family; other accepted releases and platforms are not thereby certified.
 - Readonly model execution and the Connector subprocess/manager path passed in a separately authenticated clean home. The default home still contains external integrations and remains safely refused before model input; installing an independent binary does not isolate inherited configuration.
+- Deployed staging acceptance passed for the tested Cloudflare account and platform. The formal production deployment and npm release were not performed.
 - Cold continuation and same-thread exclusion were verified with separate real app-servers using the existing home. This does not certify every desktop storage mode; native exclusion requires compatible local-store writers sharing `CODEX_HOME`.
 - Images remain unsupported, and monetary cost is not inferred from token usage.
-- No deployed cloud environment was tested.
 
 See [Codex support](codex-cli.md), [ADR-0013](adr/0013-codex-cli-workers.md), and the [implementation plan](plans/codex-cli-integration.md). Routing prompts/model selection/tool definitions were not changed, so ADR-0001's routing-evaluation trigger does not apply. Pi-to-Codex handoff is checked as a new session, not reuse of a Pi session ID.
