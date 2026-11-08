@@ -2,6 +2,8 @@
 
 状态：A、B、C、G 已完成；PR [sclfcz/Orbit#1](https://github.com/sclfcz/Orbit/pull/1) 已由 owner 合并到 main（合并提交 `50588c2`，2026-11-07），main 的 CI 通过。D 已于 2026-11-08 在 staging 验收通过（分支 `feat/codex-staging-acceptance`，只改文档），staging Worker 已于同日删除。E 已于 2026-11-08 完成：npm 发布 `@sclfcz/orbit@0.2.0`，正式 Worker 部署 `v0.2.0`，本机 Connector 升级后 `orbit doctor` 显示 Codex 可用。剩下的只有暂缓的 F。本文是交给 Codex 的任务说明。每个计划独立交付，完成后由审查方核对 diff、测试输出和证据，再决定下一个。
 
+发布记录：0.3.0 准备中：新增移除已登记目录。
+
 已在 main：Codex worker 实现、冷接续修复、独立 CLI 0.167.0 验收、干净 home 只读模型验收、`orbit doctor` 的 Codex 诊断、管理路径下的干净 home 只读验收。记录见 [codex-cli-validation.md](../codex-cli-validation.md)。`feat/codex-cli-workers`、`feat/codex-doctor`、`feat/codex-manager-readonly` 已删除，后续工作不要再用这些分支名。
 
 ## 建议顺序
