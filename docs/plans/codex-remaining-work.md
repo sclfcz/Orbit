@@ -2,7 +2,7 @@
 
 状态：A、B、C、G 已完成；PR [sclfcz/Orbit#1](https://github.com/sclfcz/Orbit/pull/1) 已由 owner 合并到 main（合并提交 `50588c2`，2026-11-07），main 的 CI 通过。D 已于 2026-11-08 在 staging 验收通过（分支 `feat/codex-staging-acceptance`，只改文档），staging Worker 已于同日删除。E 已于 2026-11-08 完成：npm 发布 `@sclfcz/orbit@0.2.0`，正式 Worker 部署 `v0.2.0`，本机 Connector 升级后 `orbit doctor` 显示 Codex 可用。剩下的只有暂缓的 F。本文是交给 Codex 的任务说明。每个计划独立交付，完成后由审查方核对 diff、测试输出和证据，再决定下一个。
 
-发布记录：0.3.0 准备中：新增移除已登记目录。
+发布记录：0.3.0 已于 2026-11-08 发布并上线，新增移除已登记目录（issue #7，PR #8）。这是第一次通过 npm Trusted Publishing 发布，附带 provenance，Trusted Publisher 配置因此完成验证。正式 Worker 从 `v0.3.0` 部署，secret 名称前后一致，`/app` 200、`/api/messages` 401；本机 Connector 升级到 0.3.0，`orbit doctor` 的 pi 和 Codex 检查都正常。正式环境验收通过：移除已登记目录后，Machines 页面不再显示该目录，磁盘文件保留，再向该目录派发任务会被拒绝；目录上有 worker 运行时，移除会被拒绝，worker 结算后可以移除。验收中有一个长任务因机器合盖睡眠而失联，触发了现有的卡死保护，与本次功能无关。
 
 已在 main：Codex worker 实现、冷接续修复、独立 CLI 0.167.0 验收、干净 home 只读模型验收、`orbit doctor` 的 Codex 诊断、管理路径下的干净 home 只读验收。记录见 [codex-cli-validation.md](../codex-cli-validation.md)。`feat/codex-cli-workers`、`feat/codex-doctor`、`feat/codex-manager-readonly` 已删除，后续工作不要再用这些分支名。
 
@@ -267,7 +267,7 @@ pnpm --dir apps/connector typecheck
 - `release.yml` 的发布前两次失败：第一次 `NPM_TOKEN` 为空值（`ENEEDAUTH`），第二次 token 未开启绕过 2FA（`EOTP`）。两次都没有向 npm 上传内容。换成限定 `@sclfcz/orbit`、绕过 2FA、30 天有效的 granular token 后，第三次重跑成功，`0.2.0` 成为 `latest`。
 - 正式 Worker 部署 `v0.2.0`。secret 名称前后一致（只有 `LOGIN_PASSWORD`，内部 key 由 Durable Object 自动生成），`/app` 200、`/api/messages` 401，已配对机器保持在线。
 - 本机 Connector 用 `orbit upgrade --version 0.2.0` 从 npx 0.1.3 升级为全局安装。`orbit doctor` 的两行 Codex 检查都是 `codex-cli 0.167.0`，Machines 页面的 Agents 显示 `pi, claude-code, codex`。
-- 之后的版本改用 npm Trusted Publishing（PR #3），不再需要 `NPM_TOKEN`。
+- 之后的版本改用 npm Trusted Publishing（PR #3），不再需要 `NPM_TOKEN`。0.3.0 是第一次通过它发布，配置已完成验证。
 
 以下是原始步骤，保留作记录。只有 owner 对每一步分别明确授权后才能执行。
 
