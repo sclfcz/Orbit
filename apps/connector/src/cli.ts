@@ -28,6 +28,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { Agent, EnvHttpProxyAgent, fetch as undiciFetch, type Dispatcher } from "undici";
 import { detectCodex } from "./codex-adapter.ts";
+import { detectPi, PI_NOT_FOUND } from "./pi-adapter.ts";
 import { runDaemon } from "./daemon.ts";
 import { installAssets } from "./install.ts";
 import { tailFile } from "./logger.ts";
@@ -372,34 +373,51 @@ async function doctorCommand(): Promise<void> {
     console.log(`service:            unknown (${err instanceof Error ? err.message : String(err)})`);
   }
 
-  // Codex is an optional agent: these diagnostics never change `healthy` or the exit code.
+  // Agent diagnostics never change `healthy` or the exit code: the steward link is what
+  // doctor gates on. Each agent is probed twice — this shell's PATH and the PATH recorded in
+  // the installed service unit, which is what the daemon actually spawns agents with.
+  let servicePath: string | null = null;
+  let servicePathUnknown: string;
+  if (!installer) {
+    servicePathUnknown = "unknown — background services are not supported on this platform";
+  } else {
+    servicePath = readServicePath(installer);
+    servicePathUnknown = `unknown — ${existsSync(installer.unitPath) ? "installed service PATH not readable" : "service not installed"}`;
+  }
+  const refreshServicePath = `run \`orbit upgrade --version ${VERSION}\` from this shell (for a source install, repeat the source install steps); \`orbit restart\` keeps the recorded PATH`;
+
+  // pi is the default agent: a missing pi fails every pi task at startup (spawn pi ENOENT).
+  const shellPi = detectPi();
+  console.log(`pi (this shell):    ${describePi(shellPi)}`);
+  const servicePi = servicePath === null ? null : detectPi(["pi"], { PATH: servicePath });
+  console.log(`pi (service PATH):  ${servicePi ? describePi(servicePi) : servicePathUnknown}`);
+  const servicePiMissing = servicePi !== null && !servicePi.installed && servicePi.diagnostic === PI_NOT_FOUND;
+  if (!shellPi.installed) {
+    const fix =
+      shellPi.diagnostic === PI_NOT_FOUND
+        ? "pi (the default agent) is not on this shell's PATH — pi tasks fail at startup until it is installed"
+        : "pi is on this shell's PATH but does not run — an interrupted install can leave it broken";
+    console.log(
+      `${fix}: \`npm install -g @earendil-works/pi-coding-agent\`, then sign in to pi${
+        servicePiMissing ? `; once \`pi --version\` works here, ${refreshServicePath}` : ""
+      }`,
+    );
+  } else if (servicePiMissing) {
+    console.log(`pi works in this shell but not on the installed service PATH — if it was installed after the service, ${refreshServicePath}`);
+  }
+
+  // Codex is an optional agent.
   const shellCodex = detectCodex();
   console.log(`codex (this shell):  ${describeCodex(shellCodex)}`);
-  let serviceCodex: ReturnType<typeof detectCodex> | null = null;
-  if (!installer) {
-    console.log("codex (service PATH): unknown — background services are not supported on this platform");
-  } else {
-    const servicePath = readServicePath(installer);
-    if (servicePath === null) {
-      console.log(
-        `codex (service PATH): unknown — ${
-          existsSync(installer.unitPath) ? "installed service PATH not readable" : "service not installed"
-        }`,
-      );
-    } else {
-      serviceCodex = detectCodex(["codex"], { PATH: servicePath });
-      console.log(`codex (service PATH): ${describeCodex(serviceCodex)}`);
-    }
-  }
+  const serviceCodex = servicePath === null ? null : detectCodex(["codex"], { PATH: servicePath });
+  console.log(`codex (service PATH): ${serviceCodex ? describeCodex(serviceCodex) : servicePathUnknown}`);
   if (
     shellCodex.installed &&
     serviceCodex &&
     !serviceCodex.installed &&
     serviceCodex.diagnostic?.startsWith("Codex CLI not found")
   ) {
-    console.log(
-      `codex works in this shell but not on the installed service PATH — if it was installed after the service, run \`orbit upgrade --version ${VERSION}\` from this shell (for a source install, repeat the source install steps); \`orbit restart\` keeps the recorded PATH`,
-    );
+    console.log(`codex works in this shell but not on the installed service PATH — if it was installed after the service, ${refreshServicePath}`);
   }
 
   if (config) {
@@ -449,6 +467,12 @@ async function doctorCommand(): Promise<void> {
   }
 
   process.exitCode = healthy ? 0 : 1;
+}
+
+function describePi(result: ReturnType<typeof detectPi>): string {
+  if (result.installed) return result.version ?? "ok";
+  if (result.diagnostic === PI_NOT_FOUND) return "not found";
+  return `broken — ${result.diagnostic}`;
 }
 
 function describeCodex(result: ReturnType<typeof detectCodex>): string {
