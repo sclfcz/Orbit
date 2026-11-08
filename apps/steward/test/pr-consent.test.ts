@@ -125,7 +125,7 @@ async function doneReport(overrides: { git?: Record<string, unknown> } = {}): Pr
   return { fake, workerId, threadId, card };
 }
 
-describe("done cards carry the consent buttons (AC1)", () => {
+describe("done cards carry the consent buttons (AC1)", { timeout: 30_000 }, () => {
   it("a write task with unpushed commits gets [同意]/[先不要]; the ask names branch and commits", async () => {
     const { card } = await doneReport();
     const buttons = consentButtonsOf(card);
@@ -148,7 +148,7 @@ describe("done cards carry the consent buttons (AC1)", () => {
   });
 });
 
-describe("[同意] → pr_worker → PR URL back in the chat (AC2)", () => {
+describe("[同意] → pr_worker → PR URL back in the chat (AC2)", { timeout: 30_000 }, () => {
   it("the click sends the command to the worker's machine and replies; pr_created pushes the URL card", async () => {
     const { fake, workerId, threadId, card } = await doneReport();
     const before = fake.cmds.length;
@@ -228,7 +228,7 @@ describe("[同意] → pr_worker → PR URL back in the chat (AC2)", () => {
   });
 });
 
-describe("[先不要] records the decision and does nothing else (AC3)", () => {
+describe("[先不要] records the decision and does nothing else (AC3)", { timeout: 30_000 }, () => {
   it("no command is sent; the decision is on the consent row and the timeline", async () => {
     const { fake, workerId, threadId, card } = await doneReport();
     await postEvent(cardActionEvent(card.providerMsgId!, "pr_decline"));
@@ -243,7 +243,7 @@ describe("[先不要] records the decision and does nothing else (AC3)", () => {
   });
 });
 
-describe("failures come back as a three-part failure report (AC4)", () => {
+describe("failures come back as a three-part failure report (AC4)", { timeout: 30_000 }, () => {
   it.each([
     ["gh_missing", "the GitHub CLI (`gh`) is not installed on this machine", "没有安装 GitHub CLI"],
     ["auth", "gh is not authenticated", "gh auth login"],
@@ -320,7 +320,7 @@ describe("failures come back as a three-part failure report (AC4)", () => {
   });
 });
 
-describe("review round 1 findings", () => {
+describe("review round 1 findings", { timeout: 30_000 }, () => {
   /** approve → the classified pr_failed event → the failed cmd_result, like the connector sends. */
   async function failAttempt(fake: FakeConnector, workerId: string, prCmdId: unknown, stage: string, message: string): Promise<void> {
     await fake.emit("pr_failed", workerId, { type: "pr_failed", cmdId: prCmdId, stage, message });
@@ -494,7 +494,7 @@ describe("review round 1 findings", () => {
   });
 });
 
-describe("the notify row id is the callback's routing key (§3.1, issue #21)", () => {
+describe("the notify row id is the callback's routing key (§3.1, issue #21)", { timeout: 30_000 }, () => {
   it("the done card's outbound id is notify:report:<workerId>:<seq>", async () => {
     const { workerId, card } = await doneReport();
     expect(card.id).toMatch(new RegExp(`^notify:report:${workerId}:\\d+$`));

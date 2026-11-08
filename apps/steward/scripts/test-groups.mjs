@@ -34,6 +34,7 @@ const COST = {
   "budget.test.ts": 25,
   "intervention.test.ts": 24,
   "review-regressions.test.ts": 21,
+  "pr-consent.test.ts": 70,
   "e2e-loop.test.ts": 19,
   "llm-reply.test.ts": 19,
   "web-workspace.test.ts": 20,
