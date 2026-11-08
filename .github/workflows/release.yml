@@ -4,25 +4,32 @@ on:
   push:
     tags: ["v*"]
 
+# Publishing uses npm Trusted Publishing (GitHub Actions OIDC), not a stored token:
+# npm registers this repo + this workflow file (`release.yml`, no environment) as the
+# trusted publisher for @sclfcz/orbit. Provenance is generated automatically for a
+# public repo + public package, so `--provenance` is not passed.
 permissions:
   contents: read
+  id-token: write # required for OIDC
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest # trusted publishing supports GitHub-hosted runners only
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
+      # No dependency cache in the release build (npm's trusted-publishing guidance):
+      # a poisoned cache entry would otherwise flow straight into an OIDC-authorized publish.
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: pnpm
           registry-url: https://registry.npmjs.org
+      # Node 22 bundles npm 10.x; trusted publishing needs npm >= 11.5.1.
+      - run: npm install -g npm@11
+      - run: npm --version
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @sclfcz/orbit build
       - run: pnpm --filter @sclfcz/orbit typecheck
       - run: pnpm --filter @sclfcz/orbit test
       - run: npm publish --access public
         working-directory: apps/connector
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
