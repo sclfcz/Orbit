@@ -127,6 +127,17 @@ An isolated Cloudflare staging Worker was deployed from the pre-Codex main commi
 - The production Steward was redeployed from the same tag. Its secret names were identical before and after, the unauthenticated gates returned `/app` `200` and `/api/messages` `401`, and the already-paired machine stayed online.
 - One paired macOS machine was upgraded from npm `0.1.3` with `orbit upgrade --version 0.2.0`. `orbit doctor` reported `codex-cli 0.167.0` in both the shell and the background-service PATH, and the workspace Machines page listed `pi, claude-code, codex`.
 
+## Production smoke test — 2026-11-08
+
+A dedicated temporary repository was registered on the production workspace and removed afterwards.
+
+- The first Pi task failed at startup with `spawn pi ENOENT`. An interrupted global install had left the machine's `pi` link broken. After Pi `1.2.0` was reinstalled, a Pi readonly task summarized the README, the session view opened, and the checkout stayed clean.
+- The first Codex write task failed when the model provider returned HTTP `400` for a `verbosity` request field. A Codex desktop session on the same machine received the same error in the same few minutes, and an outside `codex exec` with structured output succeeded afterwards, so the failure was treated as transient upstream behavior. No Orbit code or Codex configuration was changed.
+- The retried Codex write task created the expected file with the exact expected bytes in its isolated worktree and settled with a structured report. Its `git add` failed with `index.lock: Operation not permitted`: Codex's `workspaceWrite` sandbox keeps Git metadata read-only, and the same denial occurs in a plain `codex exec -s workspace-write` outside Orbit. The change stayed uncommitted, as documented in [Codex support](codex-cli.md).
+- Cold continuation reused the same worker and session identity, appended the requested line, and left only the expected file changed.
+- `orbit status` showed the `0.2.0` service running. The only broken worker was the earlier Pi startup failure. One `1006` close was followed directly by `welcome`, with no reconnect loop.
+- The test worktrees, their branches and the temporary repository were removed, and the idle Codex app-server left by the test was stopped after its identity was checked.
+
 ## Fault regressions and acceptance repairs
 
 Adapter regressions cover fragmented/early/duplicate notifications, strict report validation, terminal-then-exit deduplication, failed-spawn cleanup, inherited environment preservation, known request-validation rejections versus uncertain server errors, owned descendant cleanup, and large identity headers. The focused adapter/header run passed 26 tests.
@@ -143,7 +154,7 @@ The original implementation snapshot had 426 Connector passes, 11 stale-bin fail
 
 - `0.166.0-alpha.6` from the desktop bundle and independently installed `0.167.0` were live-tested. Discovery accepts the narrow 0.166/0.167 family; other accepted releases and platforms are not thereby certified.
 - Readonly model execution and the Connector subprocess/manager path passed in a separately authenticated clean home. The default home still contains external integrations and remains safely refused before model input; installing an independent binary does not isolate inherited configuration.
-- Deployed staging acceptance passed for the tested Cloudflare account and platform. The production rollout was checked through the unauthenticated gates, machine presence and `orbit doctor`; a Codex task was not separately run on production.
+- Deployed staging acceptance passed for the tested Cloudflare account and platform. The production smoke test covered one machine with one Pi readonly task, one Codex write task and one cold continuation; it did not repeat steer, interruption, restart or outage checks.
 - Cold continuation and same-thread exclusion were verified with separate real app-servers using the existing home. This does not certify every desktop storage mode; native exclusion requires compatible local-store writers sharing `CODEX_HOME`.
 - Images remain unsupported, and monetary cost is not inferred from token usage.
 
