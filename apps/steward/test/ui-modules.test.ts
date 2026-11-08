@@ -78,10 +78,13 @@ describe("shipped files", () => {
   it("renders a confirmation-backed remove control for each registered directory", async () => {
     const source = await asset("workspace.js");
     expect(source).toContain("function repositoryList(machine)");
+    expect(source).toContain("unsupported_command: 'directoryUnsupported'");
     expect(source).toContain("action: 'directory-remove'");
     expect(source).toContain("action: 'directory-remove-yes'");
     expect(source).toContain("t('directoryRemoveConfirm'");
     expect(source).toContain("disabled: !machine.online || removal?.state === 'pending'");
+    expect(source).toContain("for (const removal of state.directoryRemovals.values())");
+    expect(source).toContain("void runDirectoryRemoval(removal)");
     const css = await asset("workspace.css");
     expect(css).toContain(".repo-row");
     expect(css).toContain(".repo-actions");

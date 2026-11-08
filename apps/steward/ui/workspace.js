@@ -731,6 +731,7 @@ function repositoryList(machine) {
   const repos = machine.repositories ?? [];
   if (repos.length === 0) return h('span', null, t('noneListed'));
   const errorKey = (code) => ({
+    unsupported_command: 'directoryUnsupported',
     machine_offline: 'directoryRemoveOffline',
     repo_worker_active: 'directoryRemoveActive',
     repo_worker_recovering: 'directoryRemoveRecovering',
@@ -1121,6 +1122,9 @@ function openDialog(type) {
   renderDialog();
   if (type === 'machines') for (const [deviceId, form] of state.directoryForms) {
     if (form.state === 'pending') void runDirectoryRegistration(deviceId, form);
+  }
+  if (type === 'machines') for (const removal of state.directoryRemovals.values()) {
+    if (removal.state === 'pending') void runDirectoryRemoval(removal);
   }
 }
 
