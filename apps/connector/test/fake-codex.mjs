@@ -1,6 +1,6 @@
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 const options = JSON.parse(process.env.FAKE_CODEX_OPTIONS || '{}');
 if (process.argv.includes('--version')) { console.log(process.argv.find(v => v.startsWith('--fake-version='))?.slice('--fake-version='.length) || 'codex-cli 0.166.0-alpha.6'); process.exit(0); }
@@ -31,6 +31,14 @@ function finish(turnId, status = 'completed') {
   if (options.duplicate) notify('turn/completed', { turn: { id: turnId, status } });
   if (active === turnId) active = undefined;
   if (options.exitAfterTerminal) setTimeout(() => process.exit(0), 5);
+}
+function finishFirstTurnWhenReleased(turnId) {
+  const releaseFile = join(dir, options.holdFirstUntilFile);
+  const timer = setInterval(() => {
+    if (active !== turnId) { clearInterval(timer); return; }
+    if (existsSync(releaseFile)) { clearInterval(timer); finish(turnId, 'completed'); }
+  }, 10);
+  timer.unref();
 }
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   const req = JSON.parse(line);
@@ -69,6 +77,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     if (options.latePrevious && turn > 1) notify('turn/completed', { turn: { id: `turn-${turn - 1}`, status: 'failed' } });
     reply({ turn: { id: turnId, status: 'inProgress' } });
     if (options.serverRequest) emit({ id: 'server-1', method: 'item/commandExecution/requestApproval', params: { threadId: id, turnId } });
+    else if (!options.early && turn === 1 && options.holdFirstUntilFile) finishFirstTurnWhenReleased(turnId);
     else if (!options.hold && !options.early) setTimeout(() => finish(turnId, options.failed ? 'failed' : 'completed'), options.delay ?? 20);
   } else if (req.method === 'turn/steer') {
     if (options.rejectSteer) { emit({ id: req.id, error: { code: options.rejectSteer, message: 'rejected steer' } }); return; }
