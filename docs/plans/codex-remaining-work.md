@@ -269,6 +269,10 @@ pnpm --dir apps/connector typecheck
    - `gh secret list --repo sclfcz/Orbit` 中存在 `NPM_TOKEN`（只看名字，不读值）。
    - tag 指向的提交就是第 2 步的版本号提交。
    - 推送后用 `gh run list --workflow release.yml` 查看一次结果，不轮询。
+   - 0.2.0 之后的版本：`release.yml` 改用 npm Trusted Publishing（GitHub Actions OIDC），不再读取 `NPM_TOKEN`。登记参数：`sclfcz` / `Orbit` / `release.yml`，无 environment，允许 `npm publish`。npm 规定新登记的配置必须在 2 天内完成第一次成功发布，否则过期，且不能编辑，只能删除重建。owner 于 2026-11-08 登记过一次，状态为 Pending validation；owner 决定不为验证单独发版，这条配置会在 2026-11-10 过期。下次发版按以下顺序：
+     1. 推 tag 前，先在 npmjs.com 的 `@sclfcz/orbit` → Settings → Trusted Publisher 查看状态。如果显示过期或仍是 Pending validation，删除旧配置，用上面相同的参数重新登记。
+     2. 登记后 2 天内推 `v*` tag，完成第一次发布；这次发布同时完成验证。
+     3. 第一次通过 OIDC 发布成功后，再删除 repo secret `NPM_TOKEN` 和 npm token `orbit-release-ci-v2`。
    - 发布后用 `npm view @sclfcz/orbit version` 确认。
 4. **部署正式环境**（授权点 3）：按 D 第 6 步的兼容性结论决定先后顺序。部署使用 owner 现有正式部署的 Worker 名，不新建；保留 `SERVER_KEY` 和 `SERVER_KEY_PREVIOUS`，不重设密码。部署后做 agent-deploy.md 第 3 步的 curl 检查。
 5. **机器升级**：owner 在各机器上运行 `orbit upgrade`。如果 A 的结论是服务 PATH 不会自动更新，提醒 owner 按 A 写好的修复步骤处理，然后用 `orbit doctor` 确认 Codex 两行都正常。
