@@ -1,6 +1,6 @@
 # Codex CLI 接入：剩余工作交接清单
 
-状态：A、B、C、G 已完成；PR [sclfcz/Orbit#1](https://github.com/sclfcz/Orbit/pull/1) 已由 owner 合并到 main（合并提交 `50588c2`，2026-11-07），main 的 CI 通过。下一步是 D。本文是交给 Codex 的任务说明。每个计划独立交付，完成后由审查方核对 diff、测试输出和证据，再决定下一个。
+状态：A、B、C、G 已完成；PR [sclfcz/Orbit#1](https://github.com/sclfcz/Orbit/pull/1) 已由 owner 合并到 main（合并提交 `50588c2`，2026-11-07），main 的 CI 通过。D 已于 2026-11-08 在 staging 验收通过（分支 `feat/codex-staging-acceptance`，只改文档）。下一步是 E。本文是交给 Codex 的任务说明。每个计划独立交付，完成后由审查方核对 diff、测试输出和证据，再决定下一个。
 
 已在 main：Codex worker 实现、冷接续修复、独立 CLI 0.167.0 验收、干净 home 只读模型验收、`orbit doctor` 的 Codex 诊断、管理路径下的干净 home 只读验收。记录见 [codex-cli-validation.md](../codex-cli-validation.md)。`feat/codex-cli-workers`、`feat/codex-doctor`、`feat/codex-manager-readonly` 已删除，后续工作不要再用这些分支名。
 
@@ -11,8 +11,8 @@
 | 1 | A. `orbit doctor` 的 Codex 诊断 | 已完成，在 main | — |
 | 2 | B. Connector 管理路径下的干净 home 只读验收 | 已完成，在 main | — |
 | 3 | C. 提 PR、跑 CI、整理合并前审查 | 已完成，PR #1 已合并 | — |
-| 4 | D. 部署环境（独立 staging Worker）验收 | **下一步**，分支 `feat/codex-staging-acceptance` | 部署、密码、模型 key 由 owner 授权或操作 |
-| 5 | E. 版本号、发 npm、部署正式环境 | 合并已完成；其余等 D 通过 | 每一步单独授权 |
+| 4 | D. 部署环境（独立 staging Worker）验收 | 已完成，分支 `feat/codex-staging-acceptance`；staging Worker 保留待 owner 决定 | — |
+| 5 | E. 版本号、发 npm、部署正式环境 | **下一步**；合并已完成 | 每一步单独授权 |
 | 暂缓 | F. 图片输入 | owner 先决定范围 | 见 F 第 0 步 |
 | 收尾 | G. 本地清理 | 已完成（干净只读 `CODEX_HOME` 保留） | — |
 

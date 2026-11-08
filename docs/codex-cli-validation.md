@@ -2,7 +2,7 @@
 
 Overall: **package regressions, local browser workflow, cold continuation, clean readonly execution through both the adapter and Connector manager path, and deployed staging acceptance pass**. Real-CLI evidence covers worktree writes, structured reports, steer, interruption with shell cleanup, local history, Connector restart, networking recovery, and uncertain-crash no-replay recovery. Manager-level cold continuation succeeds while an unrelated real app-server remains alive; same-thread competing writers are refused before input. Readonly acceptance uses a separately authenticated clean Codex home; inherited external integrations remain rejected.
 
-This public record contains aggregate results and reproducible test names. Raw session records, machine identifiers, local paths, credentials and detailed process evidence remain local. The owner authorized committing and pushing verified source to a feature branch; deployment and merging main are outside this task.
+This public record contains aggregate results and reproducible test names. Raw session records, machine identifiers, local paths, credentials and detailed process evidence remain local. The owner merged the feature into main on 2026-11-07 and separately authorized the staging deployment below; the production deployment and npm release have not been performed.
 
 ## Final checks
 
@@ -108,7 +108,9 @@ A later adapter-level rerun after extracting the shared native-rollout helper st
 An isolated Cloudflare staging Worker was deployed from the pre-Codex main commit and then from the feature branch. The Owner configured the browser password and model key directly; no secret or pairing code transited the agent. The formal Worker was not deployed, modified, or used by this acceptance.
 
 - Both versions returned the expected unauthenticated gates: `/app` `200`, `/api/messages` `401`.
-- New Connector (`0.1.3` feature build) connected to the old Steward and received `welcome`. The old Steward accepted the extra `codex` capability advertisement, and a Pi task completed with the exact expected file bytes.
+- Between the two deployed versions, only browser UI assets changed (Codex session rendering and the `Codex` label). The Steward server and protocol code are identical, so the compatibility results below do not depend on whether the Steward or the npm package ships first.
+- The acceptance machine's PATH resolved `codex` to the independently installed `codex-cli 0.167.0`. The Machines page lists agent names but not versions, so the advertised version was not captured separately.
+- New Connector (built from the feature branch; its package version is still `0.1.3` until the release bump) connected to the old Steward and received `welcome`. The old Steward accepted the extra `codex` capability advertisement, and a Pi task completed with the exact expected file bytes.
 - Old npm Connector `0.1.3` connected to the new Steward and reported only `pi, claude-code` capabilities; Codex was correctly absent. Its Pi task also completed with the exact expected file bytes.
 - Pi `1.2.0` came from the repository's devDependency in both compatibility runs. An initial Pi launch failed with `spawn pi ENOENT` because that directory was not on the foreground Connector's PATH; restarting with the repository `node_modules/.bin` on PATH fixed the test environment. It was not a product failure.
 - An explicitly requested Codex write task ran in an isolated worktree, returned a structured `done` report, wrote the exact expected bytes, and left the registered repository checkout clean.
