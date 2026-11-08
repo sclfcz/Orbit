@@ -1,24 +1,24 @@
 # Codex CLI 接入：剩余工作交接清单
 
-状态：待实施（2026-11-07）。本文是交给 Codex 的任务说明。每个计划独立交付，完成后由审查方核对 diff、测试输出和证据，再决定下一个。
+状态：A、B、C、G 已完成；PR [sclfcz/Orbit#1](https://github.com/sclfcz/Orbit/pull/1) 已由 owner 合并到 main（合并提交 `50588c2`，2026-11-07），main 的 CI 通过。D 已于 2026-11-08 在 staging 验收通过（分支 `feat/codex-staging-acceptance`，只改文档）。下一步是 E。本文是交给 Codex 的任务说明。每个计划独立交付，完成后由审查方核对 diff、测试输出和证据，再决定下一个。
 
-已完成并推送到 `feat/codex-cli-workers`：Codex worker 实现、冷接续修复、独立 CLI 0.167.0 验收、干净 home 只读模型验收。记录见 [codex-cli-validation.md](../codex-cli-validation.md)。
+已在 main：Codex worker 实现、冷接续修复、独立 CLI 0.167.0 验收、干净 home 只读模型验收、`orbit doctor` 的 Codex 诊断、管理路径下的干净 home 只读验收。记录见 [codex-cli-validation.md](../codex-cli-validation.md)。`feat/codex-cli-workers`、`feat/codex-doctor`、`feat/codex-manager-readonly` 已删除，后续工作不要再用这些分支名。
 
 ## 建议顺序
 
-| 顺序 | 计划 | 谁能开始 | 授权门 |
+| 顺序 | 计划 | 状态 | 授权门 |
 | --- | --- | --- | --- |
-| 1 | A. `orbit doctor` 的 Codex 诊断 | Codex 直接做 | 无（只推功能分支） |
-| 2 | B. Connector 管理路径下的干净 home 只读验收 | Codex 直接做 | owner 已登录干净 home |
-| 3 | C. 提 PR、跑 CI、整理合并前审查 | Codex 做到“PR 已开、CI 绿” | 开 PR 需 owner 同意 |
-| 4 | D. 部署环境（独立 staging Worker）验收 | owner 授权后 | 部署、密码、Cloudflare 登录都由 owner 操作 |
-| 5 | E. 合并 main、发 npm、部署正式环境 | 仅 owner 明确授权后 | 每一步单独授权 |
+| 1 | A. `orbit doctor` 的 Codex 诊断 | 已完成，在 main | — |
+| 2 | B. Connector 管理路径下的干净 home 只读验收 | 已完成，在 main | — |
+| 3 | C. 提 PR、跑 CI、整理合并前审查 | 已完成，PR #1 已合并 | — |
+| 4 | D. 部署环境（独立 staging Worker）验收 | 已完成，分支 `feat/codex-staging-acceptance`；staging Worker 保留待 owner 决定 | — |
+| 5 | E. 版本号、发 npm、部署正式环境 | **下一步**；合并已完成 | 每一步单独授权 |
 | 暂缓 | F. 图片输入 | owner 先决定范围 | 见 F 第 0 步 |
-| 收尾 | G. 本地清理 | owner 同意后由审查方做 | 删除前确认 |
+| 收尾 | G. 本地清理 | 已完成（干净只读 `CODEX_HOME` 保留） | — |
 
-A 和 B 的代码文件不重叠，可以并行。C 依赖 A、B 合入分支。D 依赖 C 的分支状态。E 依赖 D 通过。
+E 的发布和部署依赖 D 通过，尤其是 D 第 6 步的新旧版本兼容性结论。
 
-### A、B 并行时的分支规则
+### A、B 并行时的分支规则（历史记录，已完成）
 
 两个任务都从 `feat/codex-cli-workers` 的最新提交各开一个分支，互不推送对方的分支：
 
@@ -48,7 +48,7 @@ A 和 B 的代码文件不重叠，可以并行。C 依赖 A、B 合入分支。
 - 公开文档只写汇总结果和可复现的测试名，不写本机绝对路径、机器 ID、会话 ID、thread ID、设备 ID。原始证据放 `/tmp` 下，不入库。
 - 不杀与 Orbit 无关的进程（包括 Codex 桌面版及其 app-server）。只能停止本次测试自己启动、且身份可校验的进程。
 - 未经 owner 明确授权，不合并 main、不打 `v*` tag（会触发 `release.yml` 自动 `npm publish`）、不 `npm publish`、不部署、不改 Cloudflare 或 GitHub 设置、不改计费。
-- 只推送到本计划指定的分支（A、B 用各自的分支，其余用 `feat/codex-cli-workers`），不 force push。
+- 只推送到本计划指定的分支（D 用 `feat/codex-staging-acceptance`，E 的版本号提交用 owner 指定的分支），不直接推 main，不 force push。
 - 使用 `package.json` 里 `packageManager` 固定的 pnpm 版本；本地版本不符时先 `corepack enable`。不要回退 `packageManager` 字段。
 - 模拟测试和真实 CLI 验收分开报告。失败、跳过、重跑都要如实写出，不能把早期失败改写成通过。
 
@@ -212,13 +212,20 @@ pnpm --dir apps/connector typecheck
 - 可能产生的 Cloudflare 或模型费用由 owner 确认。
 - 验收结束后是否删除 staging Worker 由 owner 决定。删除 Worker 会销毁它的数据。
 
+### 本机现状（2026-11-07 审查方核对）
+
+- `wrangler whoami` 已登录，令牌有 `workers_scripts (write)`。正式 Worker `orbit-steward` 已存在，最后部署于 2026-11-06。**D 全程不得对 `orbit-steward` 执行 deploy、secret 或 delete。**
+- 本机 `codex` 是 `0.167.0`，默认 `CODEX_HOME` 的模型走 `opencode-go` 提供方，不消耗 ChatGPT 额度，所以第 5 步的写任务、steer、中断、接续可以现在做。默认 home 下的只读任务会在模型输入前被拒绝，也不需要额度。干净只读 home 的 ChatGPT 额度到 2026-11-09 10:08 才恢复，D 不需要用它。
+- 没有设置代理变量，`workers.dev` 可以访问。
+- npm 上的最新版仍是 `@sclfcz/orbit@0.1.3`（不含 Codex），用作第 6 步的旧 Connector。
+
 ### 步骤
 
-按 [agent-deploy.md](../agent-deploy.md) 的纪律执行：
+按 [agent-deploy.md](../agent-deploy.md) 的纪律执行。工作分支是 `feat/codex-staging-acceptance`（从 main `50588c2` 开出）。
 
-1. 在功能分支的 checkout 上运行 `npm run deploy -- --name <staging-name>`，记录 wrangler 打印的 URL。
+1. 选一个新名字 `orbit-codex-staging-<4 位 hex>`，先用 `pnpm --dir apps/steward exec wrangler deployments list --name <staging-name>` 确认它不存在。**先部署旧版本**以便做第 6 步的“新 Connector 连旧 Steward”：在一个临时 worktree（`git worktree add /tmp/orbit-staging-old 69c1f96`，即合并前的 main）里 `pnpm install && npm run deploy -- --name <staging-name>`，记录 wrangler 打印的 URL。部署前把名字报给 owner 确认。
 2. 用 agent-deploy.md 第 3 步的 curl 检查未登录状态：`/app` 返回 200，`/api/messages` 返回 401。
-3. owner 登录、填模型 key。在 Machines 页面生成一次性配对命令。
+3. owner 设置 `LOGIN_PASSWORD`、登录、填模型 key。之后先做第 6 步的“新 Connector 连旧 Steward”，再在当前分支 checkout 上 `npm run deploy -- --name <staging-name>` 部署新版本，重新做第 2 步的 curl。然后在 Machines 页面生成一次性配对命令。
 4. 在本机用隔离状态运行前台 Connector，不安装后台服务、不改现有 `~/.sig`：
 
    ```bash
@@ -235,11 +242,12 @@ pnpm --dir apps/connector typecheck
    - 断网重连：短暂断开网络或代理后恢复，确认重新连上，未完成的命令没有重复执行。
    - 默认 home 下的只读任务被明确拒绝，UI 显示的原因可理解。
 6. 版本兼容性检查（重要，影响发布顺序）：
-   - 新 Connector 连旧 Steward：用 owner 现有正式部署的版本做只读观察，或者在 staging 先部署 main 版本再连新 Connector，确认旧 Steward 不会因为未知 agent `codex` 拒绝 hello 或报错。
-   - 新 Steward 连旧 Connector：用 npm 上的 `@sclfcz/orbit@0.1.3` 配对 staging，确认 Pi 正常、Codex 不可选且不报错。
+   - 新 Connector 连旧 Steward：在第 3 步部署新版本**之前**，用当前分支构建的 Connector（`pnpm --dir apps/connector build` 后用 `node apps/connector/bin/orbit.js`，独立 `SIG_HOME`）配对旧版本 staging，确认旧 Steward 不会因为未知 agent `codex` 拒绝 hello 或报错，并且 Pi 任务正常。不要连 owner 的正式部署。
+   - 新 Steward 连旧 Connector：新版本部署后，用 `npx -y @sclfcz/orbit@0.1.3 connect <staging-url> <code> --foreground`（另一个独立 `SIG_HOME`）配对，确认 Pi 正常、Codex 不可选且不报错。
    - 这两项决定 E 中“先部署还是先发 npm”。
 7. 证据：截图、Connector 日志摘要、SQLite worker 状态摘要放到 `/tmp/orbit-staging-evidence-<date>/`。截图如需分析，先用 `describe_image` 转成文字描述。
-8. 验收结束后停止前台 Connector。在 staging 的 Machines 页面移除这台机器。是否删除 staging Worker 问 owner。
+8. 验收结束后停止所有前台 Connector，删除 `/tmp/orbit-staging-old` worktree。在 staging 的 Machines 页面移除这些机器。是否删除 staging Worker 问 owner。
+9. 文档改动提交并推送到 `feat/codex-staging-acceptance`，不开 PR、不合并。
 
 ### 完成标准
 
@@ -255,8 +263,8 @@ pnpm --dir apps/connector typecheck
 
 ### 步骤
 
-1. **合并**（授权点 1）：PR 审查通过、CI 绿、D 已通过后，由 owner 合并，或在 owner 明确要求后用 `gh pr merge`。合并方式由 owner 决定。
-2. **版本号**：在 main 上单独提交，把 `apps/connector/package.json` 的 `version` 从 `0.1.3` 改到 owner 指定的版本（新增 agent 能力，建议 `0.2.0`）。`VERSION` 从 `package.json` 读取，不需要改别处。同步检查 README 和 `docs/agent-connect.md` 中是否有写死的版本号。
+1. **合并**（授权点 1）：已完成。owner 于 2026-11-07 用 merge commit 合并 PR #1（`50588c2`），早于 D；因此 main 已包含 Codex 功能，但尚未发布、尚未部署。
+2. **版本号**：在分支 `release/v0.2.0` 上提交，经 PR 合入 main。`apps/connector/package.json` 的 `version` 从 `0.1.3` 改为 `0.2.0`（owner 2026-11-08 同意开始 E）。`VERSION` 从 `package.json` 读取；Codex app-server 握手里原先写死的 `0.1.3` 也改为读取 `VERSION`。README 和 `docs/agent-connect.md` 中没有写死的版本号。
 3. **发布 npm**（授权点 2）：发布方式是推送 `v<version>` tag，它会触发 `.github/workflows/release.yml`，用仓库 secret `NPM_TOKEN` 执行 `npm publish --access public`。推 tag 前确认：
    - `gh secret list --repo sclfcz/Orbit` 中存在 `NPM_TOKEN`（只看名字，不读值）。
    - tag 指向的提交就是第 2 步的版本号提交。
@@ -313,28 +321,13 @@ pnpm --dir apps/connector typecheck
 
 ## 交给 Codex 的提示词模板
 
-把下面这段和对应计划一起发给 Codex，每次只发一个计划：
+A、B、C 的提示词已用完，对应分支已删除。计划 D 用下面这段：
 
 ```text
-你在 sclfcz/Orbit 仓库的 feat/codex-cli-workers 分支上工作。请完整阅读 docs/plans/codex-remaining-work.md 中“所有计划共用的约束”和“每个计划交回审查时必须提供”两节，然后只实施计划 <A/B/C/D>。
-遇到需要 owner 授权的步骤，停下来说明需要什么授权，不要绕过。
+你在 sclfcz/Orbit 仓库工作。先 git fetch，切到 feat/codex-staging-acceptance（若本地没有，从 origin/main 新建同名分支）。请完整阅读 docs/plans/codex-remaining-work.md 中“所有计划共用的约束”“每个计划交回审查时必须提供”和“D. 部署环境验收”三节，然后只实施计划 D。
+绝不对正式 Worker orbit-steward 执行 deploy、secret put、delete 或任何修改。staging 名字部署前先报给 owner 确认。
+LOGIN_PASSWORD 和模型 key 由 owner 自己输入，不要索取、不要经过你的工具；需要 owner 操作时停下来说明具体要做什么。
+配对码只用一次，不要写进日志或文档。Connector 一律前台运行并使用独立的 SIG_HOME，不安装后台服务，不碰 ~/.sig。
 测试只有放宽保护才能通过时，停下来报告，不要修改保护逻辑。
-完成后推送到 feat/codex-cli-workers（不要 force push，不要合并 main，不要打 tag），并按“交回审查”一节给出材料。
-```
-
-A、B 并行时，分别发给两个 Codex 会话：
-
-```text
-你在 sclfcz/Orbit 仓库工作。先从 origin/feat/codex-cli-workers 的最新提交新建分支 feat/codex-doctor。请完整阅读 docs/plans/codex-remaining-work.md 中“所有计划共用的约束”“A、B 并行时的分支规则”和“每个计划交回审查时必须提供”三节，然后只实施计划 A。
-只改分支规则表里归 A 的文件；需要改其他文件时停下来报告。
-测试只有放宽保护才能通过时，停下来报告，不要修改保护逻辑。
-完成后只推送 feat/codex-doctor（不要 force push，不要合并到 feat/codex-cli-workers 或 main，不要打 tag），并按“交回审查”一节给出材料。
-```
-
-```text
-你在 sclfcz/Orbit 仓库工作。先从 origin/feat/codex-cli-workers 的最新提交新建分支 feat/codex-manager-readonly。请完整阅读 docs/plans/codex-remaining-work.md 中“所有计划共用的约束”“A、B 并行时的分支规则”和“每个计划交回审查时必须提供”三节，然后只实施计划 B。
-干净只读 CODEX_HOME 由 owner 提供路径；不要自己创建、登录或复制认证。没有路径时停下来问 owner。
-只改分支规则表里归 B 的文件；需要改其他文件时停下来报告。
-测试只有放宽保护才能通过时，停下来报告，不要修改保护逻辑。
-完成后只推送 feat/codex-manager-readonly（不要 force push，不要合并到 feat/codex-cli-workers 或 main，不要打 tag），并按“交回审查”一节给出材料。
+完成后只推送 feat/codex-staging-acceptance（不要 force push，不要开 PR，不要合并 main，不要打 tag），并按“交回审查”一节给出材料。不要删除 staging Worker。
 ```
