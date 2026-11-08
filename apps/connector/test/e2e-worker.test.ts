@@ -47,15 +47,17 @@ describe("start_worker over the real transport (issue #3 + #30)", () => {
   it("advertises Codex, dispatches explicitly, durably queues after, reports and serves local history", async () => {
     app = new ConnectorApp({ store, stateDir, adapters: [fakePiAdapter(stateDir, writeScenario(dir, "unused-pi", [])),
       new CodexAdapter({ command: [process.execPath, join(import.meta.dirname, "fake-codex.mjs")],
-        env: { FAKE_CODEX_DIR: dir, FAKE_CODEX_OPTIONS: JSON.stringify({ delay: 300 }) } })] });
+        env: { FAKE_CODEX_DIR: dir, FAKE_CODEX_OPTIONS: JSON.stringify({ holdFirstUntilFile: "release-first-turn" }) } })] });
     await app.start(); await mock.waitConnected(); await mock.waitHello();
     expect(mock.hellos().at(-1)!.agents).toContainEqual(expect.objectContaining({ kind: "codex" }));
     const start = mock.sendCmd("start_worker", { workerId: "w-e2e-1", threadId: "codex-task", repoId: repo, mode: "write", agent: "codex", prompt: "task" });
     await waitFor(() => mock.resultsFor(start));
     expect(mock.resultsFor(start)).toMatchObject({ ok: true, data: { sessionId: "019a0000-0000-7000-8000-000000000001" } });
+    await waitFor(() => store.getWorker("w-e2e-1")?.state === "running", 10_000, "worker running");
     const send = mock.sendCmd("send", { workerId: "w-e2e-1", text: "after this turn", intent: "after" });
     await waitFor(() => mock.resultsFor(send));
     expect(mock.resultsFor(send)).toMatchObject({ ok: true, data: { delivery: "queued", effect: "after_run_end" } });
+    writeFileSync(join(dir, "release-first-turn"), "release");
     await waitFor(() => mock.events().filter((e) => e.type === "report").length === 2);
     expect(store.deferred("w-e2e-1", true)).toContainEqual(expect.objectContaining({ state: "delivered", text: "after this turn" }));
     const history = await app.manager.history("w-e2e-1", undefined, 8000, "full");
