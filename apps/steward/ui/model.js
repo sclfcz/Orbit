@@ -37,7 +37,16 @@ export const messagesFor = (messages, threadId) => (threadId ? messages.filter((
 export function withPending(messages, pending) {
   const known = new Set(messages.map((message) => message.id));
   const extra = [...pending.values()]
-    .map((entry) => ({ id: `user:web:${entry.id}`, role: 'user', channel: 'web', at: entry.at, threadId: entry.threadId ?? null, text: entry.text, pending: entry.status }))
+    .map((entry) => ({
+      id: `user:web:${entry.id}`,
+      role: 'user',
+      channel: 'web',
+      at: entry.at,
+      threadId: entry.threadId ?? null,
+      text: entry.text,
+      pending: entry.status,
+      ...(entry.attachments?.length ? { attachments: entry.attachments } : {}),
+    }))
     .filter((message) => !known.has(message.id));
   return [...messages, ...extra];
 }

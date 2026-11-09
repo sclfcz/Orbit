@@ -37,6 +37,7 @@ const COST = {
   "pr-consent.test.ts": 70,
   "attachments-messages.test.ts": 15,
   "attachments.test.ts": 12,
+  "attachment-cache.test.ts": 3,
   "e2e-loop.test.ts": 19,
   "llm-reply.test.ts": 19,
   "web-workspace.test.ts": 20,
@@ -54,7 +55,7 @@ const COST = {
   "web-auth.test.ts": 4,
   "web-pages.test.ts": 4,
   "ui-session.test.ts": 4,
-  "ui-modules.test.ts": 4,
+  "ui-modules.test.ts": 6,
   "workspace-stream.test.ts": 12,
   "verify-sweep-grid.test.ts": 7,
 };

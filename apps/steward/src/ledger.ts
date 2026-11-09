@@ -148,6 +148,16 @@ export interface TimelineRow {
   ts: number;
   kind: string;
   text: string;
+  /** JSON refs written by timeline.add (ADR-0014 needs cmdId for attachment metadata). */
+  refs?: string | null;
+}
+
+/** Metadata-only attachment view for the workspace snapshot (ADR-0014). Never bytes. */
+export interface WorkspaceAttachment {
+  id: string;
+  mimeType: string;
+  bytes: number;
+  state: "sent" | "delivered" | "failed" | "expired";
 }
 
 export interface MachineRow {
@@ -1474,13 +1484,67 @@ export function createLedger(deps: LedgerDeps) {
       if (threadId !== null) sql`UPDATE sh_thread SET lastActivityAt = ${now()} WHERE threadId = ${threadId}`;
     },
     list(threadId: string): TimelineRow[] {
-      return sql<TimelineRow>`SELECT id, threadId, ts, kind, text FROM sh_timeline WHERE threadId = ${threadId} ORDER BY id`;
+      return sql<TimelineRow>`SELECT id, threadId, ts, kind, text, refs FROM sh_timeline WHERE threadId = ${threadId} ORDER BY id`;
     },
     /** The newest `limit` entries, oldest first — the workspace's compact view of a Thread. */
     recent(threadId: string, limit: number): TimelineRow[] {
       return sql<TimelineRow>`
-        SELECT id, threadId, ts, kind, text FROM sh_timeline WHERE threadId = ${threadId} ORDER BY id DESC LIMIT ${limit}
+        SELECT id, threadId, ts, kind, text, refs FROM sh_timeline WHERE threadId = ${threadId} ORDER BY id DESC LIMIT ${limit}
       `.reverse();
+    },
+  };
+
+  const attachments = {
+    /**
+     * Resolve attachment metadata for one reference kind. State is derived from the bytes'
+     * lifecycle first (expired/deleted wins), then from the outbox row behind the command:
+     * queued/sent/accepted -> sent; done -> delivered; failed/expired/ambiguous -> failed.
+     * A msg link borrows the state of the command linked to the same attachment.
+     */
+    forRefs(refType: "msg" | "cmd", refIds: readonly string[], now: number): Map<string, WorkspaceAttachment[]> {
+      const result = new Map<string, WorkspaceAttachment[]>();
+      if (refIds.length === 0) return result;
+      const wanted = JSON.stringify([...new Set(refIds)]);
+      const rows = sql<{
+        refId: string;
+        id: string;
+        mimeType: string;
+        bytes: number;
+        attachmentState: string;
+        expiresAt: number;
+        commandState: string | null;
+      }>`
+        SELECT l.refId, a.id, a.mimeType, a.bytes, a.state AS attachmentState, a.expiresAt,
+          COALESCE(
+            o.state,
+            (
+              SELECT o2.state
+              FROM sh_attachment_link cl2 JOIN outbox o2 ON o2.cmdId = cl2.refId
+              WHERE cl2.attachmentId = l.attachmentId AND cl2.refType = 'cmd'
+              ORDER BY o2.createdAt DESC LIMIT 1
+            )
+          ) AS commandState
+        FROM sh_attachment_link l
+        JOIN sh_attachment a ON a.id = l.attachmentId
+        LEFT JOIN outbox o ON l.refType = 'cmd' AND o.cmdId = l.refId
+        WHERE l.refType = ${refType}
+          AND l.refId IN (SELECT value FROM json_each(${wanted}))
+        ORDER BY l.createdAt, a.id
+      `;
+      for (const row of rows) {
+        const state: WorkspaceAttachment["state"] =
+          row.attachmentState === "deleted" || row.expiresAt <= now
+            ? "expired"
+            : row.commandState === "done"
+              ? "delivered"
+              : row.commandState === "failed" || row.commandState === "expired" || row.commandState === "ambiguous" || row.commandState === null
+                ? "failed"
+                : "sent";
+        const list = result.get(row.refId) ?? [];
+        list.push({ id: row.id, mimeType: row.mimeType, bytes: row.bytes, state });
+        result.set(row.refId, list);
+      }
+      return result;
     },
   };
 
@@ -2643,7 +2707,7 @@ export function createLedger(deps: LedgerDeps) {
   };
 
   return {
-    machines, machineStatus, offlineDispatches, repos, threads, workers, reports, questions, timeline, notifications, outbound,
+    machines, machineStatus, offlineDispatches, repos, threads, workers, reports, questions, timeline, attachments, notifications, outbound,
     runs, ownerInputs, webRequests, wakes, notes, budget, routines, followups, offers, handoff, views, applyPendingEvents, recomputeThreadState, debug,
     prConsent,
   };

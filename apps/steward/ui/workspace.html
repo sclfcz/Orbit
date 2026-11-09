@@ -52,8 +52,10 @@
         <form id="composer-form" class="composer">
           <div class="composer-toolbar"><button type="button" class="scope-chip" id="scope-chip" data-action="scope"><span data-icon="route"></span><span id="scope-label">Auto</span><span data-icon="chevron-down"></span></button><span class="composer-status" id="composer-status"></span></div>
           <div class="reply-chip" id="reply-chip" hidden></div>
+          <div class="attachment-hint" id="attachment-hint" role="status" hidden></div>
+          <div id="composer-drafts"></div>
           <label class="sr-only" for="message-input" data-i18n="inputLabel">Message Orbit</label><textarea id="message-input" rows="2" placeholder="Message Orbit…" maxlength="16000"></textarea>
-          <div class="composer-bottom"><span class="composer-shortcuts"><kbd>↵</kbd> <span data-i18n="send">Send</span><span class="keyboard-separator">·</span><kbd>Shift ↵</kbd> <span data-i18n="newline">New line</span></span><div id="composer-model-controls" class="composer-model-controls"></div><button type="submit" class="send-button" id="send-button" data-i18n-label="send" aria-label="Send" disabled data-icon="arrow-up"></button></div>
+          <div class="composer-bottom"><span class="composer-shortcuts"><kbd>↵</kbd> <span data-i18n="send">Send</span><span class="keyboard-separator">·</span><kbd>Shift ↵</kbd> <span data-i18n="newline">New line</span></span><button type="button" class="attach-button" id="attach-button" data-action="attach" data-i18n-label="attachImage" data-i18n-title="attachImage" aria-label="Attach image" title="Attach image" data-icon="image" hidden></button><input id="attachment-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden><div id="composer-model-controls" class="composer-model-controls"></div><button type="submit" class="send-button" id="send-button" data-i18n-label="send" aria-label="Send" disabled data-icon="arrow-up"></button></div>
         </form>
         <p class="composer-note"><span data-icon="shield"></span><span data-i18n="notifications">Decisions wait here until you answer them.</span></p>
       </div>

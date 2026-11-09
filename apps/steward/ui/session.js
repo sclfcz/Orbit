@@ -15,6 +15,8 @@ import { formatClock } from './format.js';
 import { localeTag, t, tOr } from './i18n.js';
 import { markup } from './markup.js';
 import { branchOf, callSummary, clip, createAssembler, describeRecord, imageSrc, inputRows, placeOf } from './session-model.js';
+import { attachmentErrorKey, sessionComposeControls } from './attachment-model.js';
+import { createAttachmentDraft } from './attachment-ui.js';
 
 const PAGE_BYTES = 1024 * 1024; // per read; the page appears as the file loads
 const AUTO_LOAD_CHARS = 64 * 1024 * 1024; // past this the reader decides whether to keep loading
@@ -38,7 +40,7 @@ const uuid = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(3
  * Returns { update(), relabel(), destroy() }: `update` after the host learns the worker's state
  * changed, `relabel` after a language change.
  */
-export function mountSessionViewer(root, { workerId, agentLabel, isActive, isReachable = () => false }) {
+export function mountSessionViewer(root, { workerId, agentLabel, isActive, isReachable = () => false, imageInput, getCsrf = () => '' }) {
   const view = {
     ws: null,
     wantOpen: true,
@@ -64,6 +66,7 @@ export function mountSessionViewer(root, { workerId, agentLabel, isActive, isRea
     drawnEnd: 0,
     branch: { onBranch: new Set(), forked: false },
     destroyed: false,
+    imageInput,
   };
 
   // ---- the page ---------------------------------------------------------------------------------------
@@ -82,7 +85,15 @@ export function mountSessionViewer(root, { workerId, agentLabel, isActive, isRea
   const sendButton = h('button', { type: 'submit', class: 'button primary sv-compose-send' }, t('svSendButton'));
   const interruptButton = h('button', { type: 'button', class: 'button danger sv-compose-interrupt' }, t('svInterruptButton'));
   const composeStatus = h('span', { class: 'sv-compose-status', role: 'status' });
-  const composeForm = h('form', { class: 'sv-compose' }, composeInput, sendButton, interruptButton);
+  const attachButton = h('button', { type: 'button', class: 'attach-button sv-attach', 'aria-label': t('attachImage'), title: t('attachImage') }, icon('image'));
+  const attachHint = h('span', { class: 'attach-hint', role: 'status', hidden: true });
+  const attachInput = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif', multiple: true, hidden: true });
+  const draft = createAttachmentDraft({
+    getCsrf,
+    onError: (key) => { composeStatus.textContent = t(key); },
+    onChange: () => refreshCompose(),
+  });
+  const composeForm = h('form', { class: 'sv-compose' }, attachButton, attachHint, attachInput, draft.element, composeInput, sendButton, interruptButton);
   root.replaceChildren(h('div', { class: 'sv-statusbar' }, statusLine, retryButton), feed, jump, composeForm, composeStatus);
 
   const nearBottom = () => feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
@@ -334,6 +345,7 @@ export function mountSessionViewer(root, { workerId, agentLabel, isActive, isRea
     view.status = status;
     view.detail = detail;
     renderStatus();
+    refreshCompose();
   }
 
   // ---- reading -----------------------------------------------------------------------------------------------
@@ -526,15 +538,33 @@ export function mountSessionViewer(root, { workerId, agentLabel, isActive, isRea
 
   function refreshCompose() {
     const offline = view.status === 'offline';
-    composeInput.disabled = composeBusy || offline;
-    sendButton.disabled = composeBusy || offline;
+    const control = sessionComposeControls({
+      imageInput: view.imageInput,
+      offline,
+      busy: composeBusy,
+      text: composeInput.value.trim(),
+      draftReady: !draft.hasItems() || draft.ready(),
+    });
+    attachButton.hidden = !control.attachVisible;
+    attachButton.disabled = !control.attachEnabled;
+    attachButton.title = control.hintKey ? t(control.hintKey) : t('attachImage');
+    attachButton.setAttribute('aria-label', attachButton.title);
+    attachHint.hidden = !control.hintKey;
+    attachHint.textContent = control.hintKey ? t(control.hintKey) : '';
+    composeInput.disabled = control.inputDisabled;
+    sendButton.disabled = control.sendDisabled;
     interruptButton.disabled = composeBusy || offline || !isActive();
   }
 
-  function settleWorkerCmd(cmdId, text) {
+  function settleWorkerCmd(cmdId, text, success = false) {
+    const meta = pendingCmds.get(cmdId);
     pendingCmds.delete(cmdId);
     composeBusy = false;
     composeStatus.textContent = text;
+    if (meta?.kind === 'send') {
+      if (success && meta.withAttachments) draft.clear();
+      if (!success && meta.text && !composeInput.value) composeInput.value = meta.text;
+    }
     refreshCompose();
   }
 
@@ -544,7 +574,11 @@ export function mountSessionViewer(root, { workerId, agentLabel, isActive, isRea
       return;
     }
     const id = uuid();
-    pendingCmds.set(id, kind);
+    pendingCmds.set(id, {
+      kind,
+      text: typeof args?.text === 'string' ? args.text : '',
+      withAttachments: Boolean(args?.attachments?.length),
+    });
     composeBusy = true;
     refreshCompose();
     composeStatus.textContent = t('svComposeSending');
@@ -553,13 +587,15 @@ export function mountSessionViewer(root, { workerId, agentLabel, isActive, isRea
 
   /** Real cmd_ack/cmd_result only — never a fabricated optimistic one (§6.8). */
   function onWorkerCmdReply(message) {
-    const kind = pendingCmds.get(message.re);
+    const kind = pendingCmds.get(message.re)?.kind;
     if (!kind) return; // not a command this view issued
     const doneKey = kind === 'interrupt' ? 'svInterruptDone' : 'svComposeSent';
     if (message.t === 'cmd_result') {
-      settleWorkerCmd(message.re, message.ok
-        ? t(doneKey)
-        : t('svComposeFailed', { reason: (message.error && (message.error.message || message.error.code)) || '' }));
+      const errorKey = message.error?.code ? attachmentErrorKey(message.error.code) : null;
+      const reason = errorKey && errorKey !== 'attachFailed'
+        ? t(errorKey)
+        : (message.error && (message.error.message || message.error.code)) || '';
+      settleWorkerCmd(message.re, message.ok ? t(doneKey) : t('svComposeFailed', { reason }), Boolean(message.ok));
       return;
     }
     // cmd_ack: 'accepted' and a result-less 'duplicate' are not terminal — still waiting on cmd_result.
@@ -567,25 +603,52 @@ export function mountSessionViewer(root, { workerId, agentLabel, isActive, isRea
       composeStatus.textContent = t('svComposeAccepted');
       return;
     }
-    if (message.status === 'rejected') return settleWorkerCmd(message.re, t('svComposeFailed', { reason: message.code ?? '' }));
-    if (message.status === 'ambiguous') return settleWorkerCmd(message.re, t('svComposeUnknown'));
+    if (message.status === 'rejected') {
+      const errorKey = message.code ? attachmentErrorKey(message.code) : null;
+      return settleWorkerCmd(message.re, t('svComposeFailed', {
+        reason: errorKey && errorKey !== 'attachFailed' ? t(errorKey) : (message.code ?? ''),
+      }), false);
+    }
+    if (message.status === 'ambiguous') return settleWorkerCmd(message.re, t('svComposeUnknown'), false);
     if (message.result) {
-      settleWorkerCmd(message.re, message.result.ok ? t(doneKey) : t('svComposeFailed', { reason: '' }));
+      settleWorkerCmd(message.re, message.result.ok ? t(doneKey) : t('svComposeFailed', { reason: '' }), Boolean(message.result.ok));
     }
   }
 
   /** A `worker_cmd` the DO refused outright (unknown/broken worker, empty text): never reached
    *  outbox, so no cmd_ack is coming — settle right away instead of leaving the UI waiting. */
   function onWorkerCmdError(message) {
-    settleWorkerCmd(message.re, t('svComposeFailed', { reason: message.message || message.code || '' }));
+    const errorKey = message.code ? attachmentErrorKey(message.code) : null;
+    settleWorkerCmd(message.re, t('svComposeFailed', {
+      reason: errorKey && errorKey !== 'attachFailed' ? t(errorKey) : (message.message || message.code || ''),
+    }), false);
   }
 
   composeForm.addEventListener('submit', (event) => {
     event.preventDefault();
     const text = composeInput.value.trim();
     if (!text) return;
-    sendWorkerCmd('send', { text, intent: 'auto' });
+    if (draft.hasItems() && !draft.ready()) {
+      composeStatus.textContent = t('attachUploading');
+      return;
+    }
+    sendWorkerCmd('send', { text, intent: 'auto', ...(draft.hasItems() ? { attachments: draft.ids() } : {}) });
     composeInput.value = '';
+    refreshCompose();
+  });
+  composeInput.addEventListener('input', refreshCompose);
+  attachButton.addEventListener('click', () => attachInput.click());
+  attachInput.addEventListener('change', (event) => {
+    const files = [...(event.target.files ?? [])];
+    if (files.length) draft.addFiles(files);
+    event.target.value = '';
+  });
+  composeInput.addEventListener('paste', (event) => {
+    if (attachButton.hidden || attachButton.disabled) return;
+    const files = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith('image/'));
+    if (!files.length) return;
+    event.preventDefault();
+    draft.addFiles(files);
   });
   interruptButton.addEventListener('click', () => sendWorkerCmd('interrupt'));
 
@@ -619,6 +682,7 @@ export function mountSessionViewer(root, { workerId, agentLabel, isActive, isRea
   });
 
   renderStatus();
+  refreshCompose();
   connect();
 
   return {
@@ -626,6 +690,7 @@ export function mountSessionViewer(root, { workerId, agentLabel, isActive, isRea
     update() {
       if (view.destroyed) return;
       renderStatus();
+      refreshCompose();
       if (view.status === 'live' && !isActive()) {
         setStatus('done');
         openStream(); // whatever was appended last
@@ -643,7 +708,15 @@ export function mountSessionViewer(root, { workerId, agentLabel, isActive, isRea
       composeInput.setAttribute('placeholder', t('svComposePlaceholder'));
       sendButton.textContent = t('svSendButton');
       interruptButton.textContent = t('svInterruptButton');
+      draft.refresh();
+      refreshCompose();
       redrawAll();
+    },
+    setImageInput(value) {
+      if (value === view.imageInput) return;
+      view.imageInput = value;
+      if (value !== 'ready' && draft.hasItems()) draft.clear();
+      refreshCompose();
     },
     destroy() {
       view.destroyed = true;
@@ -656,6 +729,7 @@ export function mountSessionViewer(root, { workerId, agentLabel, isActive, isRea
       if (view.ws?.readyState === WebSocket.OPEN) view.ws.send(JSON.stringify({ t: 'unsubscribe' }));
       view.ws?.close();
       pendingCmds.clear();
+      draft.destroy();
       root.replaceChildren();
     },
   };

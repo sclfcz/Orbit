@@ -98,6 +98,8 @@ import {
   AttachmentStore,
   type AttachmentLink,
 } from "./attachments.ts";
+import { imageInputState } from "./image-capability.ts";
+import { workerForOpenQuestionReply } from "./image-route.ts";
 import { DeploymentAuth, deploymentSecrets, ownerAuthorized } from "./deployment-auth.ts";
 import { loginPage } from "./login-page.ts";
 import { renderChangeReports } from "./notes.ts";
@@ -3418,26 +3420,11 @@ export class Steward extends Agent<Env> {
   /** A user message becomes one steward input, idempotent on the msgId (steward.md §9.1/§11).
    * `prefilledNote`/`routedThreadId` serve the ask-card clicks (#7): the click's choice is
    * submitted as a system-noted user action already routed to the picked Thread. */
-  /** ADR-0014: the only main-composer attachment route is a reply that will take the
-   *  deterministic open-question relay. Mirrors submitUserMessage's routing rule exactly. */
-  private attachmentWorkerForMessage(input: { parentId?: string; routedThreadId?: string | null }): WorkerRow | null {
-    if (!input.parentId) return null;
-    const quotedThreadIds = this.ledger.outbound.threadIdsForProviderMsg(input.parentId);
-    const routed = input.routedThreadId ?? (quotedThreadIds.length === 1 ? quotedThreadIds[0]! : null);
-    if (!routed || !this.ledger.threads.get(routed)) return null;
-    const routedRow = this.ledger.outbound.rowForProviderMsg(input.parentId);
-    const question = routedRow?.questionId !== null && routedRow?.questionId !== undefined
-      ? this.ledger.questions.get(routedRow.questionId)
-      : null;
-    if (question?.status !== "open" || question.workerId === null || question.kind !== "report") return null;
-    return this.ledger.workers.get(question.workerId);
-  }
-
   /** The worker must be Pi and its current hello must advertise reference image input. */
   private assertImageWorker(worker: WorkerRow): void {
-    if (worker.agent !== "pi") throw new WorkspaceError("unsupported_capability", 400);
-    const agent = this.ledger.machines.get(worker.deviceId)?.agentCaps?.find((entry) => entry.kind === "pi");
-    if (agent?.imageInput !== "reference") throw new WorkspaceError("upgrade_required", 400);
+    const state = imageInputState(worker.agent, this.ledger.machines.get(worker.deviceId)?.agentCaps);
+    if (state === "unsupported") throw new WorkspaceError("unsupported_capability", 400);
+    if (state !== "ready") throw new WorkspaceError("upgrade_required", 400);
   }
 
   private async submitUserMessage(
@@ -3452,7 +3439,7 @@ export class Steward extends Agent<Env> {
   ): Promise<void> {
     const operationId = `user:${input.msgId}`;
     if (input.attachments?.length) {
-      const worker = this.attachmentWorkerForMessage({ parentId: input.parentId, routedThreadId: input.routedThreadId });
+      const worker = workerForOpenQuestionReply(this.ledger, { parentId: input.parentId, routedThreadId: input.routedThreadId });
       if (!worker) throw new WorkspaceError("attachments_not_allowed", 400);
       this.assertImageWorker(worker);
     }
@@ -3564,7 +3551,7 @@ export class Steward extends Agent<Env> {
     let attachmentRefs: ImageAttachmentRef[] | undefined;
     if (input.attachments?.length) {
       attachmentRefs = this.attachments.refs(input.attachments);
-      const worker = this.attachmentWorkerForMessage({ parentId, routedThreadId: thread?.threadId ?? null });
+      const worker = workerForOpenQuestionReply(this.ledger, { parentId, routedThreadId: thread?.threadId ?? null });
       if (!worker) throw new WorkspaceError("attachments_not_allowed", 400);
       this.assertImageWorker(worker);
     }

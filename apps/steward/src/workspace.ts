@@ -3,7 +3,9 @@
 // for the owner. Pure assembly over the ledger's views; nothing here writes, and nothing the
 // ledger keeps private (run text, wake text, worker transcripts, command ids) is exposed.
 import type { BudgetState } from "./budget.ts";
-import type { Ledger } from "./ledger.ts";
+import type { Ledger, WorkspaceAttachment } from "./ledger.ts";
+import { imageInputState } from "./image-capability.ts";
+import { attentionImageReply } from "./image-route.ts";
 
 /** Where a message entered the conversation. New rows are all `local` (ADR-0003: the owner
  *  API and the web workspace are two views of one local channel); `feishu`/`web` remain only
@@ -258,6 +260,8 @@ export interface WorkspaceMessage {
   open?: boolean;
   /** Assistant delivery state; web rows are always `sent`. */
   status?: string;
+  /** ADR-0014: metadata only, never bytes. Owner messages only. */
+  attachments?: WorkspaceAttachment[];
 }
 
 const parseProgress = (raw: string | null): { phase?: string; tool?: string; target?: string } | null => {
@@ -287,16 +291,32 @@ export function workspaceSnapshot(input: { ledger: Ledger; budget: BudgetState; 
   }
   const repoName = new Map(view.repos.map((repo) => [repo.repoId, repo.name]));
   const ledgerMachines = new Map(view.machines.map((machine) => [machine.deviceId, machine]));
+  const inputAttachments = ledger.attachments.forRefs("msg", view.inputs.map((row) => row.id), now);
+  const timelineCmdId = (entry: { refs?: string | null }): string | null => {
+    if (!entry.refs) return null;
+    try {
+      const refs = JSON.parse(entry.refs) as { cmdId?: unknown };
+      return typeof refs.cmdId === "string" ? refs.cmdId : null;
+    } catch {
+      return null;
+    }
+  };
+  const timelineCmdIds = view.threads.flatMap((thread) => thread.timeline.map(timelineCmdId).filter((id): id is string => id !== null));
+  const commandAttachments = ledger.attachments.forRefs("cmd", timelineCmdIds, now);
 
   const messages: WorkspaceMessage[] = [
-    ...view.inputs.map((row) => ({
-      id: `user:${row.id}`,
-      role: "user" as const,
-      channel: (row.channel as OwnerChannel) ?? "local",
-      at: row.at,
-      threadId: row.threadId,
-      text: row.text,
-    })),
+    ...view.inputs.map((row) => {
+      const attachments = inputAttachments.get(row.id);
+      return {
+        id: `user:${row.id}`,
+        role: "user" as const,
+        channel: (row.channel as OwnerChannel) ?? "local",
+        at: row.at,
+        threadId: row.threadId,
+        text: row.text,
+        ...(attachments?.length ? { attachments } : {}),
+      };
+    }),
     ...view.outbound.filter((row) => !parsePayload({ payload: String(row.payload) }).private).map((row): WorkspaceMessage => {
       const id = String(row.id);
       const payload = parsePayload({ payload: String(row.payload) });
@@ -325,7 +345,18 @@ export function workspaceSnapshot(input: { ledger: Ledger; budget: BudgetState; 
       return { row, card };
     })
     .filter(({ row, card }) => cardOpen(ledger, row, card))
-    .map(({ row, card }) => ({ id: row.id, kind: cardKind(row, card), threadId: row.threadId, questionId: row.questionId, at: Number(row.createdAt), ...card }));
+    .map(({ row, card }) => {
+      const imageReply = attentionImageReply(ledger, row, ledgerMachines);
+      return {
+        id: row.id,
+        kind: cardKind(row, card),
+        threadId: row.threadId,
+        questionId: row.questionId,
+        at: Number(row.createdAt),
+        ...(imageReply ? { imageReply } : {}),
+        ...card,
+      };
+    });
 
   return {
     now,
@@ -353,6 +384,7 @@ export function workspaceSnapshot(input: { ledger: Ledger; budget: BudgetState; 
           branch: worker.branch,
           sessionId: worker.sessionId,
           outcome: worker.lastOutcome,
+          imageInput: imageInputState(worker.agent, ledgerMachines.get(worker.deviceId)?.agentCaps),
           progress: parseProgress(worker.lastProgress),
           contextPercent: worker.contextPercent,
           lastEventAt: worker.lastEventAt,
@@ -361,7 +393,17 @@ export function workspaceSnapshot(input: { ledger: Ledger; budget: BudgetState; 
           pr: worker.consent ? { decision: worker.consent.decision, url: worker.consent.url, failure: worker.consent.failure } : null,
         };
       }),
-      timeline: thread.timeline.map((entry) => ({ id: entry.id, at: entry.ts, kind: entry.kind, text: entry.text })),
+      timeline: thread.timeline.map((entry) => {
+        const cmdId = timelineCmdId(entry);
+        const attachments = cmdId ? commandAttachments.get(cmdId) : undefined;
+        return {
+          id: entry.id,
+          at: entry.ts,
+          kind: entry.kind,
+          text: entry.text,
+          ...(attachments?.length ? { attachments } : {}),
+        };
+      }),
     })),
     machines: devices.map((device) => {
       const machine = ledgerMachines.get(device.deviceId);

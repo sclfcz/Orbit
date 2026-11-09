@@ -55,7 +55,7 @@ async function workspaceShell(env: Env, url: URL): Promise<Response> {
         "default-src 'none'",
         "script-src 'self'",
         "style-src 'self'",
-        "img-src 'self' data:",
+        "img-src 'self' blob: data:",
         `connect-src 'self' ${socket}`,
         "base-uri 'none'",
         "form-action 'self'",

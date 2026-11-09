@@ -9,6 +9,8 @@ import { STRINGS, getLocale, setLocale, t, tOr } from "../ui/i18n.js";
 import { dayKey, formatClock, formatDay, formatRelative, formatUsd, parseInline, parseMarkup, plainText, safeUrl, trimOpenMarkup } from "../ui/format.js";
 import { ACTION_KEYS, FATAL_COPY, KNOWN_TITLES, groupByDay, groupThreads, messagesFor, modelAfterProviderChange, thinkingAfterModelChange, availableChatModels, initialSetupStep, previewOf, summarize, threadMatches, withPending, workOn } from "../ui/model.js";
 import { cardView } from "../src/workspace.ts";
+import { attentionImageReply } from "../src/image-route.ts";
+import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT, ATTACHMENT_MAX_TOTAL_BYTES, attachmentControl, attachmentErrorKey, attachmentStateKey, attachmentsReady, sessionComposeControls, validateAttachmentSelection } from "../ui/attachment-model.js";
 import type { ReportRow, WorkerRow } from "../src/ledger.ts";
 import { askUserCard, noteDecisionCard, offlineAskCard, reportCardFor, routineOfferCard, workerQuestionCard } from "../src/report-template.ts";
 
@@ -25,7 +27,7 @@ const asset = async (name: string): Promise<string> => (await fetchAsset(name)).
 // design §6) — it is included here for the sink scan and the import-export check (it has no
 // imports, so that check is a no-op for it) but NOT in the i18n-completeness scan below, whose
 // own file list is separate and intentionally does not reach it.
-const SCRIPTS = ["workspace.js", "model-picker.js", "dom.js", "format.js", "model.js", "i18n.js", "markup.js", "session.js", "session-model.js", "login.js"];
+const SCRIPTS = ["workspace.js", "model-picker.js", "dom.js", "format.js", "model.js", "i18n.js", "markup.js", "session.js", "session-model.js", "login.js", "attachment-model.js", "attachment-ui.js", "attachment-cache.js"];
 
 /** The text between the parentheses of every call to `fn(…)` (not `x.fn(…)`, not `prefixfn(…)`). */
 function callArguments(source: string, fn: string): string[] {
@@ -152,7 +154,7 @@ describe("interface copy", () => {
 
   it("covers every string the page asks for, including the data-driven ones", async () => {
     const used = new Set<string>();
-    for (const name of ["workspace.js", "workspace.html", "session.js"]) {
+    for (const name of ["workspace.js", "workspace.html", "session.js", "attachment-model.js", "attachment-ui.js"]) {
       const source = await asset(name);
       for (const args of callArguments(source, "t")) for (const key of args.matchAll(/'([A-Za-z_:]+)'/g)) used.add(key[1]!);
       for (const attribute of source.matchAll(/data-i18n(?:-[a-z]+)?="([A-Za-z_:]+)"/g)) used.add(attribute[1]!);
@@ -185,6 +187,94 @@ describe("interface copy", () => {
     expect(tOr("kind_unheard_of", "raw value")).toBe("raw value");
     expect(t("no_such_key")).toBe("no_such_key"); // a missing string never takes the page down
     expect(setLocale("en")).toBe(true);
+  });
+});
+
+describe("attachment client rules (ADR-0014)", () => {
+  const file = (type: string, size: number) => ({ type, size, name: `${type}-${size}` });
+
+  it("validates type, per-image size, count and total before any upload", () => {
+    expect(validateAttachmentSelection([file("text/plain", 10)])).toBe("attachUnsupportedType");
+    expect(validateAttachmentSelection([file("image/png", ATTACHMENT_MAX_BYTES + 1)])).toBe("attachTooLarge");
+    expect(validateAttachmentSelection(Array.from({ length: ATTACHMENT_MAX_COUNT + 1 }, () => file("image/png", 1)))).toBe("attachTooMany");
+    expect(validateAttachmentSelection([file("image/png", 2 * 1024 * 1024), file("image/jpeg", 2 * 1024 * 1024), file("image/webp", 2 * 1024 * 1024)])).toBeNull();
+    expect(validateAttachmentSelection([file("image/png", 1)], Array.from({ length: ATTACHMENT_MAX_COUNT }, () => file("image/png", 1)))).toBe("attachTooMany");
+    expect(validateAttachmentSelection([file("image/png", 2.5 * 1024 * 1024), file("image/jpeg", 2.5 * 1024 * 1024), file("image/webp", 2.5 * 1024 * 1024)])).toBe("attachTotalTooLarge");
+  });
+
+  it("maps the capability states to a visible/enabled control", () => {
+    expect(attachmentControl("ready")).toEqual({ visible: true, enabled: true, messageKey: null });
+    expect(attachmentControl("unsupported")).toEqual({ visible: false, enabled: false, messageKey: null });
+    expect(attachmentControl("upgrade_required")).toEqual({ visible: true, enabled: false, messageKey: 'attachUpgradeRequired' });
+    expect(attachmentControl("ready", true)).toEqual({ visible: true, enabled: false, messageKey: 'attachOffline' });
+    expect(attachmentControl(undefined)).toEqual({ visible: false, enabled: false, messageKey: null });
+  });
+
+  it("keeps the session status line out of capability redraws", () => {
+    expect(sessionComposeControls({ imageInput: "unsupported", offline: false, busy: false, text: "hi", draftReady: true })).toMatchObject({ attachVisible: false, attachEnabled: false, hintKey: null });
+    expect(sessionComposeControls({ imageInput: "upgrade_required", offline: false, busy: false, text: "hi", draftReady: true })).toMatchObject({ attachVisible: true, attachEnabled: false, hintKey: "attachUpgradeRequired" });
+    expect(sessionComposeControls({ imageInput: "ready", offline: true, busy: false, text: "hi", draftReady: true })).toMatchObject({ attachVisible: true, attachEnabled: false, hintKey: null, sendDisabled: true });
+    expect(Object.keys(sessionComposeControls({ imageInput: "ready", offline: false, busy: false, text: "hi", draftReady: true }))).not.toContain("composeStatus");
+  });
+
+  it("maps every server refusal and attachment state to interface copy", () => {
+    for (const code of ["attachments_not_allowed", "attachment_not_found", "attachment_unavailable", "duplicate_attachment", "too_many_attachments", "too_large", "unsupported_media_type", "unsupported_capability", "upgrade_required", "storage_low", "id_conflict"]) {
+      expect(attachmentErrorKey(code), code).not.toBe("attachFailed");
+    }
+    expect(attachmentErrorKey("unknown")).toBe("attachFailed");
+    for (const state of ["uploading", "sent", "delivered", "failed", "expired"]) {
+      expect(attachmentStateKey(state), state).toMatch(/^attachState/);
+    }
+    expect(attachmentsReady([])).toBe(false);
+    expect(attachmentsReady([{ state: "ready", id: "a" }])).toBe(true);
+    expect(attachmentsReady([{ state: "uploading", id: null }])).toBe(false);
+  });
+
+  it("offers imageReply only for the open-question route and uses that worker's state", () => {
+    const ledger = (worker: unknown, question: unknown) => ({
+      outbound: {
+        row: () => ({ providerMsgId: "p1" }),
+        rowForProviderMsg: () => ({ id: "o1", threadId: "t1", questionId: "q1" }),
+        threadIdsForProviderMsg: () => ["t1"],
+      },
+      threads: { get: () => ({ threadId: "t1" }) },
+      questions: { get: () => question },
+      workers: { get: () => worker },
+    }) as never;
+    const machine = new Map([["dev1", { deviceId: "dev1", agentCaps: [{ kind: "pi", imageInput: "reference" }] }]]) as never;
+    const row = { id: "o1", threadId: "t1" };
+    expect(attentionImageReply(ledger({ agent: "pi", deviceId: "dev1" }, { status: "open", workerId: "w1", kind: "report" }), row, machine)).toBe("ready");
+    expect(attentionImageReply(ledger({ agent: "codex", deviceId: "dev1" }, { status: "open", workerId: "w1", kind: "report" }), row, machine)).toBe("unsupported");
+    expect(attentionImageReply(ledger({ agent: "pi", deviceId: "dev2" }, { status: "open", workerId: "w1", kind: "report" }), row, machine)).toBe("upgrade_required");
+    expect(attentionImageReply(ledger({ agent: "pi", deviceId: "dev1" }, { status: "answered", workerId: "w1", kind: "report" }), row, machine)).toBeUndefined();
+  });
+});
+
+describe("attachment rendering hooks", () => {
+  it("keeps pending previews and history thumbnails in the same message shape", () => {
+    const pending = withPending([], new Map([["r1", { id: "r1", text: "x", at: 1, status: "sending", attachments: [{ id: "a", mimeType: "image/png", bytes: 1, state: "sent" }] }]]));
+    expect(pending[0].attachments).toHaveLength(1);
+  });
+
+  it("wires thumbnails, expired placeholders and the two composers", async () => {
+    const workspace = await asset("workspace.js");
+    expect(workspace).toContain("attachmentThumbnails(message.attachments)");
+    expect(workspace).toContain("attachments: entry.attachments.map((item) => item.id)");
+    expect(workspace).toContain("draft.take()");
+    expect(workspace).toContain("attachmentControl(target?.imageReply)");
+    const session = await asset("session.js");
+    expect(session).toContain("setImageInput(value)");
+    expect(session).toContain("attachments: draft.ids()");
+    expect(session).toContain("attachHint");
+    const refresh = /function refreshCompose\(\)[\s\S]*?\n  \}/.exec(session)?.[0] ?? "";
+    expect(refresh).not.toContain("composeStatus");
+    const ui = await asset("attachment-ui.js");
+    expect(ui).toContain("attachment.state === 'expired'");
+    expect(ui).toContain("IntersectionObserver");
+    expect(ui).toContain("URL.revokeObjectURL");
+    expect(ui).toContain("pagehide");
+    expect(ui).toContain("attachmentCache.get");
+    expect(ui).not.toContain("MutationObserver");
   });
 });
 

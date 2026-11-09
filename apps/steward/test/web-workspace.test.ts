@@ -344,7 +344,7 @@ describe("the page and its files", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
     const policy = response.headers.get("content-security-policy")!;
-    for (const directive of ["default-src 'none'", "script-src 'self'", "style-src 'self'", "frame-ancestors 'none'", "base-uri 'none'", "connect-src 'self' wss://example.com"]) {
+    for (const directive of ["default-src 'none'", "script-src 'self'", "style-src 'self'", "img-src 'self' blob: data:", "frame-ancestors 'none'", "base-uri 'none'", "connect-src 'self' wss://example.com"]) {
       expect(policy).toContain(directive);
     }
     const html = await response.text();
