@@ -39,6 +39,7 @@ export function attachmentErrorKey(code) {
 export function attachmentStateKey(state) {
   return {
     uploading: 'attachStateUploading',
+    ready: 'attachStateReady',
     sent: 'attachStateSent',
     delivered: 'attachStateDelivered',
     failed: 'attachStateFailed',
