@@ -2,7 +2,7 @@
 
 状态：A、B、C、G 已完成；PR [sclfcz/Orbit#1](https://github.com/sclfcz/Orbit/pull/1) 已由 owner 合并到 main（合并提交 `50588c2`，2026-11-07），main 的 CI 通过。D 已于 2026-11-08 在 staging 验收通过（分支 `feat/codex-staging-acceptance`，只改文档），staging Worker 已于同日删除。E 已于 2026-11-08 完成：npm 发布 `@sclfcz/orbit@0.2.0`，正式 Worker 部署 `v0.2.0`，本机 Connector 升级后 `orbit doctor` 显示 Codex 可用。F（图片输入）v1 已于 2026-11-09 随 0.4.0 上线（仅 Pi），Codex 和 Claude Code 的图片输入随 0.5.0 上线。本文是交给 Codex 的任务说明。每个计划独立交付，完成后由审查方核对 diff、测试输出和证据，再决定下一个。
 
-发布记录：0.5.0 于 2026-11-09 发布，Codex 和 Claude Code worker 也能接收图片（ADR-0014 第 6、7 阶段，PR #21–#23）。发布前的真实验收：`codex-cli 0.167.0` 读出图片里的随机文字，turn 结束后临时文件已删除；Claude Code 2.0.31 首次运行和 `--resume` 续跑都读出了各自图片里的随机文字。
+发布记录：0.5.0 于 2026-11-09 发布，Codex 和 Claude Code worker 也能接收图片（ADR-0014 第 6、7 阶段，PR #21–#23）。发布前的真实验收：`codex-cli 0.167.0` 读出图片里的随机文字，turn 结束后临时文件已删除；Claude Code 2.0.31 首次运行和 `--resume` 续跑都读出了各自图片里的随机文字。正式 Worker 从 `v0.5.0` 部署，`/app` 200、`/api/messages` 401；本机 Connector 升级到 0.5.0，`orbit doctor` 的 pi 和 Codex 检查都正常。
 
 0.4.0 于 2026-11-09 发布，新增图片输入 v1（issue #13，ADR-0014，PR #14–#18）：会话视图直接发送和回复 worker 提问时可附带图片，仅支持 Pi；connector 按引用拉取并校验字节；当前 Pi 模型不支持图片时在发送 prompt 前拒绝；附件按 24 小时 / 7 天 / 30 天规则清理。发布前的真实验收：视觉模型读出了图片里的随机文字，纯文本模型在 prompt 发出前被拒绝为 `model_no_image_input`。正式 Worker 从 `v0.4.0` 部署，`/app` 200、`/api/messages` 401；本机 Connector 升级到 0.4.0，`orbit doctor` 的 pi 和 Codex 检查都正常。
 
