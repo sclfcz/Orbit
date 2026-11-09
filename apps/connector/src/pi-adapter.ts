@@ -90,6 +90,16 @@ interface WorkerRuntime {
   buffered: RawAdapterEvent[] | null;
 }
 
+function assertImageModel(state: { model?: { input?: unknown } }): void {
+  const input = state.model?.input;
+  if (!Array.isArray(input) || !input.includes("image")) {
+    throw new AdapterError(
+      "model_no_image_input",
+      "当前 Pi 模型不支持图片，请切换模型或去掉图片。",
+    );
+  }
+}
+
 export class PiAdapter implements AgentAdapter {
   readonly kind = "pi" as const;
   readonly capabilities = PI_CAPABILITIES;
@@ -189,6 +199,7 @@ export class PiAdapter implements AgentAdapter {
           `sessionId mismatch: expected ${spec.workerId}, got ${String(state.sessionId)}`,
         );
       }
+      if (spec.images?.length) assertImageModel(state);
       const sessionFile = typeof state.sessionFile === "string" ? state.sessionFile : null;
       // §6.3/§10: the session file and its current tail are on record BEFORE the prompt is
       // sent, so a crash anywhere past this point leaves decidable evidence (the marker
@@ -210,13 +221,18 @@ export class PiAdapter implements AgentAdapter {
       // §4.4 step 5: send the prompt, wrapped for the extension's commandId marker
       // (ADR-0001). The `/sig` extension command consumes it, so the response's
       // disposition must be "handled".
-      const message = wrapPrompt(spec.commandId, spec.prompt);
+      // The /sig extension command only receives its text args; with images attached the
+      // input-handler preamble is the path that preserves them. It records the same
+      // command marker and strips the preamble before the user message.
+      const message = spec.images?.length
+        ? markerPreamble(spec.commandId, spec.prompt)
+        : wrapPrompt(spec.commandId, spec.prompt);
       const response = await proc.rpc(
         { type: "prompt", message, images: spec.images?.map((i) => ({ type: "image", data: i.data, mimeType: i.mimeType })) },
         timeout,
       );
       const disposition = String(response.disposition ?? "");
-      if (disposition !== "handled") {
+      if (disposition !== "handled" && !(spec.images?.length && disposition === "started")) {
         throw new AdapterError(
           "startup_failed",
           `sig extension did not consume the prompt (disposition: ${disposition || "missing"}); ` +
@@ -244,11 +260,19 @@ export class PiAdapter implements AgentAdapter {
     how: Delivery,
   ): Promise<{ effect?: string }> {
     const runtime = this.require(id);
+    if (input.images?.length) {
+      const state = await runtime.process.rpc({ type: "get_state" }, this.options.getStateTimeoutMs ?? 5000);
+      assertImageModel(state);
+    }
     const images = input.images?.map((i) => ({ type: "image", data: i.data, mimeType: i.mimeType }));
     if (how === "prompt") {
       // A prompt-path send goes through the same `/sig` wrapper as the initial prompt,
       // so the commandId marker lands in the session (ADR-0001: ambiguous-command detection).
-      const message = input.commandId ? wrapPrompt(input.commandId, input.text) : input.text;
+      const message = input.commandId
+        ? input.images?.length
+          ? markerPreamble(input.commandId, input.text)
+          : wrapPrompt(input.commandId, input.text)
+        : input.text;
       await runtime.process.rpc({ type: "prompt", message, images });
       return {};
     }

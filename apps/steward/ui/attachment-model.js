@@ -24,6 +24,7 @@ export function attachmentErrorKey(code) {
     attachments_not_allowed: 'attachNotAllowed',
     attachment_not_found: 'attachNotFound',
     attachment_unavailable: 'attachUnavailable',
+    model_no_image_input: 'attachModelNoImage',
     duplicate_attachment: 'attachDuplicate',
     too_many_attachments: 'attachTooMany',
     too_large: 'attachTooLarge',

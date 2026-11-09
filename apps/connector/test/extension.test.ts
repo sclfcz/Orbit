@@ -8,7 +8,7 @@ class FakePi {
   readonly commands = new Map<string, { handler: (args: string) => Promise<void> }>();
   readonly handlers = new Map<string, (event: Record<string, unknown>) => unknown>();
   readonly appendedEntries: { customType: string; data?: unknown }[] = [];
-  readonly sentUserMessages: { content: string; options?: Record<string, unknown> }[] = [];
+  readonly sentUserMessages: { content: unknown; options?: Record<string, unknown> }[] = [];
 
   registerTool(tool: { name: string; parameters: { properties: Record<string, unknown> }; execute: (id: string, params: Record<string, unknown>) => Promise<unknown> }): void {
     this.tools.set(tool.name, tool);
@@ -22,7 +22,7 @@ class FakePi {
   appendEntry(customType: string, data?: unknown): void {
     this.appendedEntries.push({ customType, data });
   }
-  sendUserMessage(content: string, options?: Record<string, unknown>): void {
+  sendUserMessage(content: unknown, options?: Record<string, unknown>): void {
     this.sentUserMessages.push({ content, options });
   }
 }
@@ -101,6 +101,24 @@ describe("sig pi extension (connector-pi.md §7, ADR-0001)", () => {
     await pi.commands.get(COMMAND_NAME)!.handler("just a plain prompt");
     expect(pi.appendedEntries).toEqual([]);
     expect(pi.sentUserMessages).toEqual([{ content: "just a plain prompt", options: { expandPromptTemplates: false } }]);
+  });
+
+  it("keeps images attached to /sig prompts and marker-preambled steer/follow-up inputs", async () => {
+    const pi = fresh();
+    const image = { type: "image", data: "AAAA", mimeType: "image/png" };
+    pi.handlers.get("input")!({
+      type: "input", text: `/${COMMAND_NAME} cmd-img\nlook at this`, images: [image], source: "rpc",
+    });
+    await pi.commands.get(COMMAND_NAME)!.handler("cmd-img\nlook at this");
+    expect(pi.sentUserMessages).toEqual([{
+      content: [{ type: "text", text: "look at this" }, image],
+      options: { expandPromptTemplates: false },
+    }]);
+
+    const transformed = pi.handlers.get("input")!({
+      type: "input", text: "[sig:command cmd-steer]\nsteer it", images: [image], source: "rpc",
+    }) as { action: string; text: string; images?: unknown[] };
+    expect(transformed).toMatchObject({ action: "transform", text: "steer it", images: [image] });
   });
 
   it("forces exactly one re-report per window when a completed run did not report", () => {

@@ -1999,7 +1999,7 @@ export class Steward extends Agent<Env> {
       // never delivered (§6.3 recovery). Both land on the timeline and wake the steward;
       // the ordinary tool says the delivery happened, so silence would mislead.
       const code = typeof error.code === "string" ? error.code : null;
-      if (code === "session_in_use" || code === "not_delivered") {
+      if (code === "session_in_use" || code === "not_delivered" || code === "attachment_unavailable" || code === "model_no_image_input") {
         this.noteCommandAttention(result.re, code, typeof error.message === "string" ? error.message : "");
       }
     }
@@ -2056,7 +2056,11 @@ export class Steward extends Agent<Env> {
     const text =
       code === "session_in_use"
         ? `「${safe}」没有送达：这个会话此刻正被机器上的另一个 pi 进程使用（可能是本人在键盘上继续）。`
-        : `「${safe}」没有送达：连接器在投递前重启了，worker 从未收到这条指令。`;
+        : code === "attachment_unavailable"
+          ? `「${safe}」没有送达：图片暂时无法读取，请重新发送。`
+          : code === "model_no_image_input"
+            ? `「${safe}」没有送达：当前 Pi 模型不支持图片，请切换模型或去掉图片。`
+            : `「${safe}」没有送达：连接器在投递前重启了，worker 从未收到这条指令。`;
     this.ledger.timeline.add(worker.threadId, "note", text, { cmdId, workerId: row.workerId, code });
     this.ledger.wakes.queue(
       "event",

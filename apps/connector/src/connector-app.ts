@@ -28,6 +28,8 @@ export interface ConnectorAppOptions {
   WebSocketImpl?: ClientOptions["WebSocketImpl"];
   /** Per-URL `ws` proxy agent (issue #68), forwarded to the client. */
   wsAgent?: ClientOptions["wsAgent"];
+  /** ADR-0014: proxied fetch for attachment pulls (daemon passes ProxyApplication.fetch). */
+  fetchImpl?: typeof fetch;
   /** Every agent to drive (issue #17); defaults to pi plus Claude Code when installed.
    *  Overrides `adapter` when both are given. */
   adapters?: AgentAdapter[];
@@ -99,6 +101,8 @@ export class ConnectorApp {
         },
       },
       pr: options.pr,
+      ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+      ...(options.log ? { log: options.log } : {}),
       emit: (workerId, fields) => {
         this.log?.("worker_event", { workerId, type: fields.type });
         this.client.emit(workerId, fields);
@@ -207,6 +211,7 @@ export class ConnectorApp {
         kind: a.kind,
         version: a.version ?? VERSION,
         capabilities: a.capabilities,
+        ...("imageInput" in a && a.imageInput ? { imageInput: a.imageInput } : {}),
       })),
       repos: this.store.listRepos().map((r) => ({
         repoId: r.repoId,

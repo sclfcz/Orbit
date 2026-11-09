@@ -17,6 +17,7 @@
 //    preamble that the input handler below strips and persists as the same custom entry.
 
 import { Type } from "@earendil-works/pi-ai";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 /** `custom` entry customType for the command marker (ADR-0001). */
@@ -77,6 +78,9 @@ export default function sigExtension(pi: ExtensionAPI): void {
   // continuation deliberately does not (it is part of the same window, so `reportCalled` and
   // `reminded` persist across it — that is what makes the reminder fire at most once).
   let window: WindowState = { reportCalled: false, reminded: false };
+  // The command handler receives only its text args; capture the images attached to the
+  // `/sig` prompt in the input hook and hand them to sendUserMessage with the clean text.
+  let pendingCommandImages: ImageContent[] | undefined;
 
   pi.on("before_agent_start", (event) => {
     if (event.messageType === "user") window = { reportCalled: false, reminded: false };
@@ -110,7 +114,12 @@ export default function sigExtension(pi: ExtensionAPI): void {
       const commandId = newline === -1 ? null : args.slice(0, newline).trim();
       const text = newline === -1 ? args : args.slice(newline + 1);
       if (commandId) appendCommandEntry(pi, commandId);
-      pi.sendUserMessage(text, { expandPromptTemplates: false });
+      const images = pendingCommandImages;
+      pendingCommandImages = undefined;
+      pi.sendUserMessage(
+        images?.length ? [{ type: "text", text }, ...images] : text,
+        { expandPromptTemplates: false },
+      );
     },
   });
 
@@ -121,12 +130,20 @@ export default function sigExtension(pi: ExtensionAPI): void {
   // session tail means the queued message was delivered, and its absence is evidence too.
   pi.on("input", (event) => {
     const text = typeof event.text === "string" ? event.text : null;
+    if (text?.startsWith(`/${COMMAND_NAME} `)) {
+      pendingCommandImages = event.images;
+      return undefined;
+    }
     if (!text || !text.startsWith(MARKER_PREAMBLE)) return undefined;
     const newline = text.indexOf("\n");
     const commandId = newline === -1 ? null : text.slice(MARKER_PREAMBLE.length, newline).replace(/\]$/, "").trim();
     if (!commandId || /[\r\n]/.test(commandId)) return undefined;
     appendCommandEntry(pi, commandId);
-    return { action: "transform" as const, text: newline === -1 ? "" : text.slice(newline + 1) };
+    return {
+      action: "transform" as const,
+      text: newline === -1 ? "" : text.slice(newline + 1),
+      ...(event.images?.length ? { images: event.images } : {}),
+    };
   });
 
   pi.on("agent_before_settle", (event) => {
