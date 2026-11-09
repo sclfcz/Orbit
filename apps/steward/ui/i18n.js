@@ -84,6 +84,7 @@ export const STRINGS = {
   attachConflict: ['This upload id already has different content. Choose the image again.', '这个上传 id 已对应其他内容，请重新选择图片。'],
   attachOffline: ['Connect this machine before attaching an image.', '机器上线后才能添加图片。'],
   attachStateUploading: ['Uploading…', '上传中…'],
+  attachStateReady: ['Ready to send', '可发送'],
   attachStateSent: ['Sent', '已发送'],
   attachStateDelivered: ['Delivered', '已送达'],
   attachStateFailed: ['Failed', '失败'],

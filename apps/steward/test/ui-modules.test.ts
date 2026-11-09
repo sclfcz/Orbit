@@ -226,6 +226,8 @@ describe("attachment client rules (ADR-0014)", () => {
     for (const state of ["uploading", "sent", "delivered", "failed", "expired"]) {
       expect(attachmentStateKey(state), state).toMatch(/^attachState/);
     }
+    // A finished upload is a draft waiting to be sent, never shown as a failure.
+    expect(attachmentStateKey("ready")).toBe("attachStateReady");
     expect(attachmentsReady([])).toBe(false);
     expect(attachmentsReady([{ state: "ready", id: "a" }])).toBe(true);
     expect(attachmentsReady([{ state: "uploading", id: null }])).toBe(false);
