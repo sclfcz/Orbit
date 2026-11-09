@@ -92,6 +92,8 @@ This ADR is design-only; no model calls, deployments or code changes were made. 
 - A real Pi acceptance run with a text-only catalog model: the same image-bearing message must fail with `model_no_image_input` before any prompt reaches the model, and the provider must never see the Pi placeholder text.
 - A first live check that a Pi prompt with an image still produces the same report/adjudication path as text; the delivery-ambiguity rule must not change.
 
+> **Update (0.5.0):** Codex and Claude Code now take images too (phases 6 and 7 below). Where decision 1 and the Context items above say Pi-only or `images: false`, they describe v1 as shipped in 0.4.0.
+
 ## Phased delivery
 
 Each phase is a separate, independently mergeable PR.
@@ -101,8 +103,10 @@ Each phase is a separate, independently mergeable PR.
 3. **Web composer and history.** Attach control, file picker, previews, upload progress, disabled states for unsupported/offline workers, send of ids, history thumbnails and expired placeholders, zh/en strings. Tests: UI module assertions and a snapshot/render test. Done when the owner can send from the session view and from an open question reply, and a refresh shows the same attachments.
 4. **Connector pull and Pi integration.** Device-authenticated fetch client, streaming temp file, hash/magic verification, proxy-aware fetch, Pi model check (`model_no_image_input`), Pi `prompt`/`steer`/`follow_up` and the deferred path, restart re-fetch, cleanup, `imageInput` capability. Tests: every failure mode above, plus a fake RPC assertion of the exact `{type:"image", data, mimeType}` shape. Done when a real Pi turn reads a random-text image, a text-only model is refused before the prompt, the report contains the text, and the checkout is clean.
 5. **Retention and observability.** Alarm sweep for the 24-hour/7-day/30-day rules, deletion tests with a fake clock, metadata-only history after deletion, and log/metric lines that contain no image data. Done when bytes are gone at the stated times and history still renders the expired state.
-6. **Codex images (later).** Decode a verified attachment to a `localImage` temp path, pass it through `start`/`send`/deferred, flip `images` only after a real 0.167.0 acceptance run, update the Codex support doc. Separate PR and review.
-7. **Claude Code images (later).** Move the adapter to `--input-format stream-json`, send image content blocks, validate against the real CLI, then flip the capability. Separate PR and review.
+6. **Codex images.** Decode a verified attachment to a `localImage` temp path, pass it through `start`/`send`/deferred, flip `images` only after a real 0.167.0 acceptance run, update the Codex support doc. Separate PR and review. Done in PR #22 (shipped in 0.5.0): a real `codex-cli 0.167.0` turn read a random label and the temporary file was gone after settlement.
+7. **Claude Code images.** Move the adapter to `--input-format stream-json`, send image content blocks, validate against the real CLI, then flip the capability. Separate PR and review. Done in PR #23 (shipped in 0.5.0): only image-bearing runs use stream-json input; text-only runs keep plain stdin. A real Claude Code 2.0.31 run read a random label on start and a second one on a `--resume` send.
+
+PR #21 made the gate per agent: the connector advertises `imageInput` for every adapter whose `capabilities.images` is true, and the Steward checks the worker's own agent entry. Pi without the flag still means an old connector (`upgrade_required`); any other agent without it is `unsupported`. Unlike Pi, the Codex and Claude adapters do not pre-check whether the configured model accepts images, so a text-only model fails in its own reply rather than with `model_no_image_input`.
 
 ## Owner sign-off
 

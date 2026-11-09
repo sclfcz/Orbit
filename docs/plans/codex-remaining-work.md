@@ -1,8 +1,10 @@
 # Codex CLI 接入：剩余工作交接清单
 
-状态：A、B、C、G 已完成；PR [sclfcz/Orbit#1](https://github.com/sclfcz/Orbit/pull/1) 已由 owner 合并到 main（合并提交 `50588c2`，2026-11-07），main 的 CI 通过。D 已于 2026-11-08 在 staging 验收通过（分支 `feat/codex-staging-acceptance`，只改文档），staging Worker 已于同日删除。E 已于 2026-11-08 完成：npm 发布 `@sclfcz/orbit@0.2.0`，正式 Worker 部署 `v0.2.0`，本机 Connector 升级后 `orbit doctor` 显示 Codex 可用。F（图片输入）v1 已于 2026-11-09 随 0.4.0 上线，只支持 Pi；Codex 和 Claude Code 的图片支持是后续工作。本文是交给 Codex 的任务说明。每个计划独立交付，完成后由审查方核对 diff、测试输出和证据，再决定下一个。
+状态：A、B、C、G 已完成；PR [sclfcz/Orbit#1](https://github.com/sclfcz/Orbit/pull/1) 已由 owner 合并到 main（合并提交 `50588c2`，2026-11-07），main 的 CI 通过。D 已于 2026-11-08 在 staging 验收通过（分支 `feat/codex-staging-acceptance`，只改文档），staging Worker 已于同日删除。E 已于 2026-11-08 完成：npm 发布 `@sclfcz/orbit@0.2.0`，正式 Worker 部署 `v0.2.0`，本机 Connector 升级后 `orbit doctor` 显示 Codex 可用。F（图片输入）v1 已于 2026-11-09 随 0.4.0 上线（仅 Pi），Codex 和 Claude Code 的图片输入随 0.5.0 上线。本文是交给 Codex 的任务说明。每个计划独立交付，完成后由审查方核对 diff、测试输出和证据，再决定下一个。
 
-发布记录：0.4.0 于 2026-11-09 发布，新增图片输入 v1（issue #13，ADR-0014，PR #14–#18）：会话视图直接发送和回复 worker 提问时可附带图片，仅支持 Pi；connector 按引用拉取并校验字节；当前 Pi 模型不支持图片时在发送 prompt 前拒绝；附件按 24 小时 / 7 天 / 30 天规则清理。发布前的真实验收：视觉模型读出了图片里的随机文字，纯文本模型在 prompt 发出前被拒绝为 `model_no_image_input`。正式 Worker 从 `v0.4.0` 部署，`/app` 200、`/api/messages` 401；本机 Connector 升级到 0.4.0，`orbit doctor` 的 pi 和 Codex 检查都正常。
+发布记录：0.5.0 于 2026-11-09 发布，Codex 和 Claude Code worker 也能接收图片（ADR-0014 第 6、7 阶段，PR #21–#23）。发布前的真实验收：`codex-cli 0.167.0` 读出图片里的随机文字，turn 结束后临时文件已删除；Claude Code 2.0.31 首次运行和 `--resume` 续跑都读出了各自图片里的随机文字。
+
+0.4.0 于 2026-11-09 发布，新增图片输入 v1（issue #13，ADR-0014，PR #14–#18）：会话视图直接发送和回复 worker 提问时可附带图片，仅支持 Pi；connector 按引用拉取并校验字节；当前 Pi 模型不支持图片时在发送 prompt 前拒绝；附件按 24 小时 / 7 天 / 30 天规则清理。发布前的真实验收：视觉模型读出了图片里的随机文字，纯文本模型在 prompt 发出前被拒绝为 `model_no_image_input`。正式 Worker 从 `v0.4.0` 部署，`/app` 200、`/api/messages` 401；本机 Connector 升级到 0.4.0，`orbit doctor` 的 pi 和 Codex 检查都正常。
 
 0.3.0 已于 2026-11-08 发布并上线，新增移除已登记目录（issue #7，PR #8）。这是第一次通过 npm Trusted Publishing 发布，附带 provenance，Trusted Publisher 配置因此完成验证。正式 Worker 从 `v0.3.0` 部署，secret 名称前后一致，`/app` 200、`/api/messages` 401；本机 Connector 升级到 0.3.0，`orbit doctor` 的 pi 和 Codex 检查都正常。正式环境验收通过：移除已登记目录后，Machines 页面不再显示该目录，磁盘文件保留，再向该目录派发任务会被拒绝；目录上有 worker 运行时，移除会被拒绝，worker 结算后可以移除。验收中有一个长任务因机器合盖睡眠而失联，触发了现有的卡死保护，与本次功能无关。
 
@@ -17,7 +19,7 @@
 | 3 | C. 提 PR、跑 CI、整理合并前审查 | 已完成，PR #1 已合并 | — |
 | 4 | D. 部署环境（独立 staging Worker）验收 | 已完成；staging Worker 已删除 | — |
 | 5 | E. 版本号、发 npm、部署正式环境 | 已完成（2026-11-08） | — |
-| 6 | F. 图片输入 | v1 已完成（0.4.0，仅 Pi）；Codex、Claude Code 待做 | — |
+| 6 | F. 图片输入 | 已完成：Pi（0.4.0），Codex、Claude Code（0.5.0） | — |
 | 收尾 | G. 本地清理 | 已完成（干净只读 `CODEX_HOME` 保留） | — |
 
 E 的发布和部署依赖 D 通过，尤其是 D 第 6 步的新旧版本兼容性结论。
@@ -296,16 +298,19 @@ pnpm --dir apps/connector typecheck
 
 ---
 
-## F. 图片输入（v1 已完成，0.4.0 上线）
+## F. 图片输入（已完成，0.4.0 和 0.5.0 上线）
 
-owner 选了端到端方案，按 ADR-0014 和 issue #13 分五个阶段实施：ADR（PR #14）、Steward 存储与 API（PR #15）、Web 输入框与历史（PR #16）、Connector 拉取与 Pi 接入（PR #17）、保留期清理（PR #18）。v1 只支持 Pi。
+owner 选了端到端方案，按 ADR-0014 和 issue #13 分阶段实施：ADR（PR #14）、Steward 存储与 API（PR #15）、Web 输入框与历史（PR #16）、Connector 拉取与 Pi 接入（PR #17）、保留期清理（PR #18），这部分随 0.4.0 上线，只支持 Pi。
 
-后续（ADR-0014 第 6、7 阶段，各自单独 PR 和审查）：
+随后的 0.5.0 加上了另外两个 agent：
 
-- **Codex：** 把校验过的附件解码为 `localImage` 临时文件，覆盖 `start`/`send`/deferred；用真实 0.167.0 验收后才打开 `images`，并更新 Codex 支持文档。
-- **Claude Code：** 适配器改用 `--input-format stream-json` 发送图片内容块，用真实 CLI 验证后再打开能力。
+- **按 agent 判断能力（PR #21）：** Connector 对每个 `capabilities.images` 为 true 的适配器声明 `imageInput`，Steward 按 worker 自己的 agent 判断能否附图。
+- **Codex（PR #22，ADR-0014 第 6 阶段）：** 校验过的附件写进 Connector 状态目录下的私有子目录，以 `localImage` 发给 app-server；turn 结束、中断、停止、崩溃都会删除，启动时清理残留。
+- **Claude Code（PR #23，第 7 阶段）：** 只有带图片的 run 改用 `--input-format stream-json`，纯文本 run 不变。
 
-下面的“现状”和“方案 1 清单”是做决定前的记录，保留供第 6 阶段参考；其中 Steward、协议和 Pi 的部分已过时。
+和 Pi 不同，Codex 和 Claude 不会在发送前检查模型是否支持图片；配了纯文本模型时，失败会出现在模型回复里。
+
+下面的“现状”和“方案 1 清单”是做决定前的记录，已全部过时，仅作历史保留。
 
 ### 决定前的现状（历史记录）
 
