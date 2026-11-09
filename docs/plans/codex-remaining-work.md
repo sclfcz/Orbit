@@ -1,8 +1,8 @@
 # Codex CLI 接入：剩余工作交接清单
 
-状态：A、B、C、G 已完成；PR [sclfcz/Orbit#1](https://github.com/sclfcz/Orbit/pull/1) 已由 owner 合并到 main（合并提交 `50588c2`，2026-11-07），main 的 CI 通过。D 已于 2026-11-08 在 staging 验收通过（分支 `feat/codex-staging-acceptance`，只改文档），staging Worker 已于同日删除。E 已于 2026-11-08 完成：npm 发布 `@sclfcz/orbit@0.2.0`，正式 Worker 部署 `v0.2.0`，本机 Connector 升级后 `orbit doctor` 显示 Codex 可用。剩下的只有暂缓的 F。本文是交给 Codex 的任务说明。每个计划独立交付，完成后由审查方核对 diff、测试输出和证据，再决定下一个。
+状态：A、B、C、G 已完成；PR [sclfcz/Orbit#1](https://github.com/sclfcz/Orbit/pull/1) 已由 owner 合并到 main（合并提交 `50588c2`，2026-11-07），main 的 CI 通过。D 已于 2026-11-08 在 staging 验收通过（分支 `feat/codex-staging-acceptance`，只改文档），staging Worker 已于同日删除。E 已于 2026-11-08 完成：npm 发布 `@sclfcz/orbit@0.2.0`，正式 Worker 部署 `v0.2.0`，本机 Connector 升级后 `orbit doctor` 显示 Codex 可用。F（图片输入）v1 已于 2026-11-09 随 0.4.0 上线，只支持 Pi；Codex 和 Claude Code 的图片支持是后续工作。本文是交给 Codex 的任务说明。每个计划独立交付，完成后由审查方核对 diff、测试输出和证据，再决定下一个。
 
-发布记录：0.4.0 于 2026-11-09 发布，新增图片输入 v1（issue #13，ADR-0014，PR #14–#18）：会话视图直接发送和回复 worker 提问时可附带图片，仅支持 Pi；connector 按引用拉取并校验字节；当前 Pi 模型不支持图片时在发送 prompt 前拒绝；附件按 24 小时 / 7 天 / 30 天规则清理。
+发布记录：0.4.0 于 2026-11-09 发布，新增图片输入 v1（issue #13，ADR-0014，PR #14–#18）：会话视图直接发送和回复 worker 提问时可附带图片，仅支持 Pi；connector 按引用拉取并校验字节；当前 Pi 模型不支持图片时在发送 prompt 前拒绝；附件按 24 小时 / 7 天 / 30 天规则清理。发布前的真实验收：视觉模型读出了图片里的随机文字，纯文本模型在 prompt 发出前被拒绝为 `model_no_image_input`。正式 Worker 从 `v0.4.0` 部署，`/app` 200、`/api/messages` 401；本机 Connector 升级到 0.4.0，`orbit doctor` 的 pi 和 Codex 检查都正常。
 
 0.3.0 已于 2026-11-08 发布并上线，新增移除已登记目录（issue #7，PR #8）。这是第一次通过 npm Trusted Publishing 发布，附带 provenance，Trusted Publisher 配置因此完成验证。正式 Worker 从 `v0.3.0` 部署，secret 名称前后一致，`/app` 200、`/api/messages` 401；本机 Connector 升级到 0.3.0，`orbit doctor` 的 pi 和 Codex 检查都正常。正式环境验收通过：移除已登记目录后，Machines 页面不再显示该目录，磁盘文件保留，再向该目录派发任务会被拒绝；目录上有 worker 运行时，移除会被拒绝，worker 结算后可以移除。验收中有一个长任务因机器合盖睡眠而失联，触发了现有的卡死保护，与本次功能无关。
 
@@ -17,7 +17,7 @@
 | 3 | C. 提 PR、跑 CI、整理合并前审查 | 已完成，PR #1 已合并 | — |
 | 4 | D. 部署环境（独立 staging Worker）验收 | 已完成；staging Worker 已删除 | — |
 | 5 | E. 版本号、发 npm、部署正式环境 | 已完成（2026-11-08） | — |
-| 暂缓 | F. 图片输入 | owner 先决定范围 | 见 F 第 0 步 |
+| 6 | F. 图片输入 | v1 已完成（0.4.0，仅 Pi）；Codex、Claude Code 待做 | — |
 | 收尾 | G. 本地清理 | 已完成（干净只读 `CODEX_HOME` 保留） | — |
 
 E 的发布和部署依赖 D 通过，尤其是 D 第 6 步的新旧版本兼容性结论。
@@ -296,18 +296,25 @@ pnpm --dir apps/connector typecheck
 
 ---
 
-## F. 图片输入（暂缓，owner 先决定范围）
+## F. 图片输入（v1 已完成，0.4.0 上线）
 
-范围已改为端到端，见 ADR-0014 和 issue #13。
+owner 选了端到端方案，按 ADR-0014 和 issue #13 分五个阶段实施：ADR（PR #14）、Steward 存储与 API（PR #15）、Web 输入框与历史（PR #16）、Connector 拉取与 Pi 接入（PR #17）、保留期清理（PR #18）。v1 只支持 Pi。
 
-### 现状
+后续（ADR-0014 第 6、7 阶段，各自单独 PR 和审查）：
+
+- **Codex：** 把校验过的附件解码为 `localImage` 临时文件，覆盖 `start`/`send`/deferred；用真实 0.167.0 验收后才打开 `images`，并更新 Codex 支持文档。
+- **Claude Code：** 适配器改用 `--input-format stream-json` 发送图片内容块，用真实 CLI 验证后再打开能力。
+
+下面的“现状”和“方案 1 清单”是做决定前的记录，保留供第 6 阶段参考；其中 Steward、协议和 Pi 的部分已过时。
+
+### 决定前的现状（历史记录）
 
 - `CodexAdapter.start()` 收到图片时抛出 `unsupported_capability`，能力声明 `images: false`。
 - Connector 内部类型（`agent.ts`、`worker-manager.ts`、`store.ts` 的 deferred 队列）已有 `images` 字段，`WorkerManager` 在入口处检查单张 4 MB base64 上限。
 - 协议包 `packages/protocol` 和 Steward 都没有把图片发给 Connector 的路径。Pi 声明了 `images: true`，但目前也收不到 Web 端的图片。
 - Codex 0.167.0 的 app-server 协议有两种图片输入：`{ type: "image", url, detail? }` 和 `{ type: "localImage", path, detail? }`。桌面自带的 0.166.0-alpha.6 是否同样支持尚未核实。
 
-### 第 0 步：owner 决定
+### 第 0 步：owner 决定（已选方案 2）
 
 - **方案 1：只做 Connector 适配层。** 范围小，但在 Steward 支持之前，用户用不到这个功能。
 - **方案 2：端到端。** 包括 Web 上传、Steward 存储与转发、协议字段、Connector、Codex。这是一个独立的产品功能，应该另开 issue 和 ADR，不放在本分支里。
