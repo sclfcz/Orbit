@@ -182,6 +182,13 @@ async function readAttachmentBody(request: Request): Promise<Uint8Array> {
   return bytes;
 }
 
+/** Even a retired attachment is private and must not be cached or content-sniffed. */
+export function attachmentNotFoundResponse(jsonError = false): Response {
+  const headers = { "cache-control": "private, no-store", "x-content-type-options": "nosniff" };
+  // Keep each endpoint's existing error body shape.
+  return jsonError ? json({ error: "not_found" }, 404, headers) : new Response("not found", { status: 404, headers });
+}
+
 export function attachmentResponse(id: string, download: AttachmentDownload): Response {
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -286,7 +293,7 @@ export async function handleWorkspaceApi(request: Request, url: URL, session: Ap
   if (ownerAttachment && request.method === "GET") {
     if (!deps.readAttachment) return json({ error: "not_found" }, 404);
     const download = deps.readAttachment(ownerAttachment[1]!);
-    return download ? attachmentResponse(ownerAttachment[1]!, download) : json({ error: "not_found" }, 404);
+    return download ? attachmentResponse(ownerAttachment[1]!, download) : attachmentNotFoundResponse(true);
   }
   if (request.method !== "POST") return json({ error: "not_found" }, 404);
 
