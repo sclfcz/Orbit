@@ -211,6 +211,14 @@ async function handle(command) {
         text = text.slice(nl + 1);
         appendSessionEntry({ type: "custom", customType: "sig.command", data: { commandId, at: Date.now() } });
         appendSessionEntry({ type: "message", message: { role: "user", content: text, timestamp: Date.now() } });
+      } else if (typeof text === "string" && text.startsWith("[sig:command ")) {
+        const nl = text.indexOf("\n");
+        commandId = text.slice("[sig:command ".length, nl).replace(/\]$/, "").trim() || null;
+        text = text.slice(nl + 1);
+        if (commandId) {
+          appendSessionEntry({ type: "custom", customType: "sig.command", data: { commandId, at: Date.now() } });
+          appendSessionEntry({ type: "message", message: { role: "user", content: text, timestamp: Date.now() } });
+        }
       }
       logPrompt({ commandId, text, images: command.images ?? undefined, cwd: process.cwd(), sessionId, pid: process.pid, at: Date.now() });
       const run = scenario.runs?.[nextRunIndex()] ?? [];

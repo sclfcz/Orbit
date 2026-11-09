@@ -430,7 +430,7 @@ describe("main composer attachments", { timeout: 30_000 }, () => {
   }, 30_000);
 
   it("surfaces an attachment failure on the main reply path", async () => {
-    const { fake, workerId } = await runningWorker({ name: "mac-fail", imageInput: true });
+    const { fake, workerId, threadId } = await runningWorker({ name: "mac-fail", imageInput: true });
     await fake.emit("report", workerId, {
       type: "report",
       status: "needs_decision",
@@ -459,11 +459,12 @@ describe("main composer attachments", { timeout: 30_000 }, () => {
     const send = (await fake.waitForCmds(2))[1]!;
     fake.send({ t: "cmd_ack", re: send.id, status: "accepted" });
     fake.send({ t: "cmd_result", re: send.id, ok: false, error: { code: "attachment_unavailable", message: "missing", retriable: false } });
-    const text = await waitFor(async () => {
-      await waitWhileOutboundPending();
-      return (await ownerStub().outboundRows(50)).find((row) => row.kind === "text" && row.status === "sent" && JSON.parse(row.payload as string).text.includes("图片暂时无法读取"));
+    await waitFor(async () => {
+      const snap = await ownerStub().debugSnapshot();
+      return snap.threads.find((thread) => thread.threadId === threadId)?.timeline.some((entry) => entry.text.includes("图片暂时无法读取"));
     }, 10_000, "main-path attachment failure");
-    expect(text).toBeTruthy();
+    const outbound = await ownerStub().outboundRows(50);
+    expect(outbound.some((row) => row.kind === "text" && JSON.parse(row.payload as string).text.includes("图片暂时无法读取"))).toBe(false);
     fake.close();
   }, 60_000);
 });

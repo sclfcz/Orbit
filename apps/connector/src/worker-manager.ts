@@ -252,6 +252,8 @@ export class WorkerManager {
   /** Sends held while the worker is starting/recovering/lost (§6.2 queue rows); drained
    *  when the transition completes, superseded by an interrupt (protocol §7.4). */
   private readonly pendingSends = new Map<string, PendingSend[]>();
+  /** Sends currently pulling attachments, per worker, so interrupt/stop can supersede them. */
+  private readonly fetchingSends = new Map<string, Set<{ cancelled: boolean }>>();
   private readonly drainingDeferred = new Set<string>();
   /** The in-flight start/resume transition per worker: what `interrupt` waits out and what
    *  drains the send queue when it settles. */
@@ -731,6 +733,7 @@ export class WorkerManager {
    *   (resumable), a pending auto-resume is cancelled, and the serial queue is pumped.
    * - otherwise (idle-hot reclaim, broken): the memory play it always was — nothing to settle. */
   async stopProcess(workerId: string): Promise<void> {
+    this.cancelFetchingSends(workerId);
     this.cancelIdleReclaim(workerId);
     const worker = this.store.getWorker(workerId);
     if (worker?.state === "queued") {
@@ -1082,17 +1085,39 @@ export class WorkerManager {
       }
     }
     let preparedFiles: FetchedAttachment[] | undefined;
+    const fetchTicket = hasAttachments ? this.beginFetchingSend(args.workerId) : null;
+    let fetchError: unknown;
     if (hasAttachments) {
       try {
         preparedFiles = await this.attachments.fetchAll(args.attachments!);
       } catch (error) {
-        if (error instanceof AttachmentFetchError) {
-          throw new CommandError("attachment_unavailable", error.message, false);
-        }
-        throw new CommandError("attachment_unavailable", error instanceof Error ? error.message : String(error), false);
+        fetchError = error;
+      } finally {
+        this.endFetchingSend(args.workerId, fetchTicket!);
       }
     }
+    if (fetchTicket?.cancelled) {
+      this.attachments.cleanup(preparedFiles ?? []);
+      throw new CommandError("superseded", "superseded by an interrupt or stop on the same worker");
+    }
+    if (fetchError) {
+      this.attachments.cleanup(preparedFiles ?? []);
+      if (fetchError instanceof AttachmentFetchError) {
+        throw new CommandError("attachment_unavailable", fetchError.message, false);
+      }
+      throw new CommandError("attachment_unavailable", fetchError instanceof Error ? fetchError.message : String(fetchError), false);
+    }
     try {
+      // The pull can take up to the fetcher deadline; the worker may have started, settled,
+      // broken or lost its repo in the meantime. Route using the post-pull state.
+      worker = this.requireWorker(args.workerId);
+      this.guardDelivery(worker);
+      if (worker.state === "broken" || worker.agent === "codex" && worker.lastOutcome === "delivery_ambiguous") {
+        throw new CommandError("broken_worker", `worker ${args.workerId} is broken and needs a human decision`);
+      }
+      if (!this.store.getRepo(worker.repoId)) {
+        throw new CommandError("not_registered_repo", `repo '${worker.repoId}' is not registered on this machine`);
+      }
       const canSteerNow = args.intent !== "after" && worker.state === "running" &&
         this.adapterOfWorker(worker).capabilities.steer && this.adapterOfWorker(worker).isStreaming?.(worker.workerId);
       if (this.store.deferred(args.workerId).length > 0 && !canSteerNow) {
@@ -1541,12 +1566,32 @@ export class WorkerManager {
   /** Protocol §7.4: sends queued ahead of an interrupt whose delivery never started answer
    *  `result{ok:false, code:"superseded"}` — their instruction is the user's to re-issue. */
   private supersedePendingSends(workerId: string): void {
+    this.cancelFetchingSends(workerId);
     const queue = this.pendingSends.get(workerId);
     if (!queue) return;
     this.pendingSends.delete(workerId);
     for (const send of queue) {
       send.reject(new CommandError("superseded", "superseded by an interrupt on the same worker"));
     }
+  }
+
+  private beginFetchingSend(workerId: string): { cancelled: boolean } {
+    const ticket = { cancelled: false };
+    const set = this.fetchingSends.get(workerId) ?? new Set();
+    set.add(ticket);
+    this.fetchingSends.set(workerId, set);
+    return ticket;
+  }
+
+  private endFetchingSend(workerId: string, ticket: { cancelled: boolean }): void {
+    const set = this.fetchingSends.get(workerId);
+    if (!set) return;
+    set.delete(ticket);
+    if (set.size === 0) this.fetchingSends.delete(workerId);
+  }
+
+  private cancelFetchingSends(workerId: string): void {
+    for (const ticket of this.fetchingSends.get(workerId) ?? []) ticket.cancelled = true;
   }
 
   // --- §3 degradation: sends deferred past run end (issue #17) ------------------------------

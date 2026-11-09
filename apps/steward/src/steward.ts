@@ -2061,9 +2061,6 @@ export class Steward extends Agent<Env> {
           : code === "model_no_image_input"
             ? `「${safe}」没有送达：当前 Pi 模型不支持图片，请切换模型或去掉图片。`
             : `「${safe}」没有送达：连接器在投递前重启了，worker 从未收到这条指令。`;
-    if (code === "attachment_unavailable" || code === "model_no_image_input") {
-      void this.enqueueOutbound({ kind: "text", to: OWNER_ID, threadId: worker.threadId, text, urgency: "push" });
-    }
     this.ledger.timeline.add(worker.threadId, "note", text, { cmdId, workerId: row.workerId, code });
     this.ledger.wakes.queue(
       "event",

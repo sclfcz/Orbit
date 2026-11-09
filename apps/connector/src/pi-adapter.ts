@@ -221,13 +221,18 @@ export class PiAdapter implements AgentAdapter {
       // §4.4 step 5: send the prompt, wrapped for the extension's commandId marker
       // (ADR-0001). The `/sig` extension command consumes it, so the response's
       // disposition must be "handled".
-      const message = wrapPrompt(spec.commandId, spec.prompt);
+      // The /sig extension command only receives its text args; with images attached the
+      // input-handler preamble is the path that preserves them. It records the same
+      // command marker and strips the preamble before the user message.
+      const message = spec.images?.length
+        ? markerPreamble(spec.commandId, spec.prompt)
+        : wrapPrompt(spec.commandId, spec.prompt);
       const response = await proc.rpc(
         { type: "prompt", message, images: spec.images?.map((i) => ({ type: "image", data: i.data, mimeType: i.mimeType })) },
         timeout,
       );
       const disposition = String(response.disposition ?? "");
-      if (disposition !== "handled") {
+      if (disposition !== "handled" && !(spec.images?.length && disposition === "started")) {
         throw new AdapterError(
           "startup_failed",
           `sig extension did not consume the prompt (disposition: ${disposition || "missing"}); ` +
@@ -263,7 +268,11 @@ export class PiAdapter implements AgentAdapter {
     if (how === "prompt") {
       // A prompt-path send goes through the same `/sig` wrapper as the initial prompt,
       // so the commandId marker lands in the session (ADR-0001: ambiguous-command detection).
-      const message = input.commandId ? wrapPrompt(input.commandId, input.text) : input.text;
+      const message = input.commandId
+        ? input.images?.length
+          ? markerPreamble(input.commandId, input.text)
+          : wrapPrompt(input.commandId, input.text)
+        : input.text;
       await runtime.process.rpc({ type: "prompt", message, images });
       return {};
     }

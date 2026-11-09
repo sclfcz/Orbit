@@ -290,4 +290,85 @@ describe("attachment pulls and Pi delivery (ADR-0014 phase 4)", { timeout: 30_00
     expect(recovered?.result).toMatchObject({ ok: false, error: { code: "not_delivered" } });
     restarted.stop();
   }, 30_000);
+
+  it("re-reads the worker after a slow pull and does not strand a send that raced startup", async () => {
+    const bytes = png();
+    const fetchImpl = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      return response(bytes);
+    }) as typeof fetch;
+    await startApp([[
+      { emit: { type: "agent_start" } },
+      { emit: { type: "turn_start" } },
+      { delayMs: 1_500 },
+      { emit: { type: "agent_settled", aborted: false } },
+    ]], fetchImpl, { startup: { delayMs: 700 } });
+    const start = mock.sendCmd("start_worker", {
+      workerId: "w-race-1", threadId: "race", repoId: repo, mode: "write", prompt: "keep working",
+    });
+    await waitFor(() => store.getWorker("w-race-1")?.state === "starting", 5_000, "starting");
+    const send = mock.sendCmd("send", { workerId: "w-race-1", text: "sent during startup", intent: "now", attachments: [ref(bytes)] });
+    expect(await waitFor(() => mock.resultsFor(start), 10_000, "start result")).toMatchObject({ ok: true });
+    expect(await waitFor(() => mock.resultsFor(send), 10_000, "send result")).toMatchObject({ ok: true });
+    expect(prompts().some((entry) => entry.type === "steer" && entry.text === "sent during startup")).toBe(true);
+    expect(readdirSync(join(stateDir, "attachments"))).toEqual([]);
+  }, 30_000);
+
+  it("returns broken_worker if the worker breaks while the pull is in flight", async () => {
+    const bytes = png();
+    const fetchImpl = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      return response(bytes);
+    }) as typeof fetch;
+    await startApp([reportRun({ status: "done", summary: "ready" })], fetchImpl);
+    const workerId = await startWorker();
+    await waitFor(() => store.getWorker(workerId)?.state === "idle", 10_000, "idle");
+    const send = mock.sendCmd("send", { workerId, text: "break during pull", intent: "auto", attachments: [ref(bytes)] });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    store.setWorkerState(workerId, "broken", "test_break");
+    expect(await waitFor(() => mock.resultsFor(send), 10_000, "broken result")).toMatchObject({
+      ok: false, error: { code: "broken_worker" },
+    });
+    expect(readdirSync(join(stateDir, "attachments"))).toEqual([]);
+  }, 30_000);
+
+  it("supersedes an in-flight pull on interrupt without invoking Pi", async () => {
+    const bytes = png();
+    const fetchImpl = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      return response(bytes);
+    }) as typeof fetch;
+    await startApp([reportRun({ status: "done", summary: "ready" })], fetchImpl);
+    const workerId = await startWorker();
+    await waitFor(() => store.getWorker(workerId)?.state === "idle", 10_000, "idle");
+    const before = prompts().filter((entry) => entry.type === "prompt").length;
+    const send = mock.sendCmd("send", { workerId, text: "cancel me", intent: "auto", attachments: [ref(bytes)] });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const interrupt = mock.sendCmd("interrupt", { workerId });
+    expect(await waitFor(() => mock.resultsFor(send), 10_000, "superseded result")).toMatchObject({
+      ok: false, error: { code: "superseded" },
+    });
+    await waitFor(() => mock.resultsFor(interrupt), 10_000, "interrupt result");
+    expect(prompts().filter((entry) => entry.type === "prompt")).toHaveLength(before);
+    expect(readdirSync(join(stateDir, "attachments"))).toEqual([]);
+  }, 30_000);
+
+  it("supersedes an in-flight pull on stop_process", async () => {
+    const bytes = png();
+    const fetchImpl = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      return response(bytes);
+    }) as typeof fetch;
+    await startApp([reportRun({ status: "done", summary: "ready" })], fetchImpl);
+    const workerId = await startWorker();
+    await waitFor(() => store.getWorker(workerId)?.state === "idle", 10_000, "idle");
+    const send = mock.sendCmd("send", { workerId, text: "stop me", intent: "auto", attachments: [ref(bytes)] });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const stop = mock.sendCmd("stop_process", { workerId });
+    expect(await waitFor(() => mock.resultsFor(send), 10_000, "superseded result")).toMatchObject({
+      ok: false, error: { code: "superseded" },
+    });
+    await waitFor(() => mock.resultsFor(stop), 10_000, "stop result");
+    expect(readdirSync(join(stateDir, "attachments"))).toEqual([]);
+  }, 30_000);
 });
