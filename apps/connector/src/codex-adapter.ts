@@ -1,5 +1,9 @@
 // One owned app-server per worker. No desktop session import, no in-adapter after queue.
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AgentAdapter, AgentCapabilities, Delivery, RawAdapterEvent, SessionUsage, StartSpec, WorkerHandle } from "./agent.ts";
 import { AdapterError } from "./agent.ts";
 import { adjudicate } from "./adjudication.ts";
@@ -16,7 +20,15 @@ export interface CodexAdapterOptions {
   env?: Record<string, string | undefined>;
   requestTimeoutMs?: number;
   stopGraceMs?: number;
+  /** Connector state directory. Image files live in its private `codex-images` subdirectory,
+   *  never in a repository checkout or worktree. Without one, a per-adapter private temp
+   *  directory is used instead. */
+  stateDir?: string;
 }
+/** App-server `localImage` needs a readable file; the extension follows the verified type. */
+const IMAGE_EXTENSIONS: Record<string, string> = {
+  "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif",
+};
 interface Runtime {
   generation: number;
   spec: StartSpec; rpc: CodexTransport; threadId?: string; path?: string;
@@ -26,17 +38,70 @@ interface Runtime {
   terminalWaiters: Set<() => void>;
   activitySeen: boolean; controlWaiters: Set<() => void>;
   stopPromise?: Promise<void>;
+  /** Decoded image files handed to the app-server; removed when the turn is over. */
+  images: Set<string>;
 }
 
 export class CodexAdapter implements AgentAdapter {
   readonly kind = "codex" as const;
   readonly capabilities: AgentCapabilities = { steer: true, followUp: false, interrupt: true, resume: true,
-    history: true, images: false, structuredReport: true, readonly: true };
+    history: true, images: true, structuredReport: true, readonly: true };
   readonly version?: string;
   private readonly runtimes = new Map<string, Runtime>();
   private readonly generations = new Map<string, number>();
   private readonly listeners: ((e: RawAdapterEvent) => void)[] = [];
-  constructor(private readonly options: CodexAdapterOptions = {}) { this.version = options.version; }
+  private readonly imageDir: string;
+  private readonly ownedImageDir: boolean;
+  constructor(private readonly options: CodexAdapterOptions = {}) {
+    this.version = options.version;
+    this.ownedImageDir = Boolean(options.stateDir);
+    this.imageDir = options.stateDir
+      ? join(options.stateDir, "codex-images")
+      : mkdtempSync(join(tmpdir(), "orbit-codex-images-"));
+    // Connector boot: a crash can leave an image a turn never consumed. Only the
+    // connector-owned directory is purged; a per-adapter temp directory is already empty.
+    if (this.ownedImageDir) this.cleanupOrphans();
+    else this.prepareImageDir();
+  }
+  /** Remove files left by a previous process. Never called while this adapter owns a turn. */
+  cleanupOrphans(): void {
+    rmSync(this.imageDir, { recursive: true, force: true });
+    this.prepareImageDir();
+  }
+  private prepareImageDir(): void {
+    mkdirSync(this.imageDir, { recursive: true, mode: 0o700 });
+    chmodSync(this.imageDir, 0o700);
+  }
+  /** Writes base64 images as owner-only files and tracks them for turn-scoped cleanup. */
+  private writeImages(runtime: Runtime, images: readonly { data: string; mimeType: string }[] | undefined): string[] {
+    if (!images?.length) return [];
+    const written: string[] = [];
+    try {
+      this.prepareImageDir();
+      for (const image of images) {
+        const extension = IMAGE_EXTENSIONS[image.mimeType];
+        if (!extension) throw new AdapterError("unsupported_capability", `Codex cannot read ${image.mimeType || "an untyped image"}; use PNG, JPEG, WebP or GIF`);
+        const bytes = typeof image.data === "string" ? Buffer.from(image.data, "base64") : Buffer.alloc(0);
+        if (bytes.length === 0) throw new AdapterError("invalid_image", "image data is empty or not base64");
+        const path = join(this.imageDir, `${randomUUID()}.${extension}`);
+        writeFileSync(path, bytes, { mode: 0o600, flag: "wx" });
+        runtime.images.add(path);
+        written.push(path);
+      }
+      return written;
+    } catch (error) {
+      this.removeImages(written);
+      throw error;
+    }
+  }
+  private removeImages(paths: Iterable<string>): void {
+    for (const path of paths) { try { rmSync(path, { force: true }); } catch { /* best effort */ } }
+  }
+  private removeRuntimeImages(runtime: Runtime): void {
+    this.removeImages(runtime.images);
+    runtime.images.clear();
+  }
+
   on(_event: "worker-event", fn: (e: RawAdapterEvent) => void): void { this.listeners.push(fn); }
   private emit(runtime: Runtime, event: RawAdapterEvent): void {
     if (runtime.buffered) runtime.buffered.push(event);
@@ -44,18 +109,20 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   async start(spec: StartSpec): Promise<WorkerHandle> {
-    if (spec.images?.length) throw new AdapterError("unsupported_capability", "Codex images have not been validated; send text only");
     if (this.isRunning(spec.workerId)) throw new AdapterError("session_in_use", "Codex worker already has a process");
     const generation = (this.generations.get(spec.workerId) ?? 0) + 1;
     this.generations.set(spec.workerId, generation);
     const runtime = { generation, spec, startingTurn: false, open: false, stopping: false, text: "", finalText: "", blocked: false,
-      turn: 0, early: [], buffered: [], settled: new Set<string>(), terminalWaiters: new Set<() => void>(), activitySeen: false, controlWaiters: new Set<() => void>() } as unknown as Runtime;
+      turn: 0, early: [], buffered: [], settled: new Set<string>(), terminalWaiters: new Set<() => void>(), activitySeen: false,
+      controlWaiters: new Set<() => void>(), images: new Set<string>() } as unknown as Runtime;
     runtime.rpc = new CodexTransport([...(this.options.command ?? ["codex"]), "app-server", "--listen", "stdio://",
       "-c", "features.apps=false", "-c", "features.multi_agent=false", "-c", "web_search=\"disabled\"",
       "-c", "experimental_thread_store.type=\"local\""],
     spec.cwd, childEnv(process.env, this.options.env), (message) => this.receive(runtime, message), (code, signal) => {
       if (this.runtimes.get(spec.workerId) !== runtime) return;
       this.runtimes.delete(spec.workerId);
+      // A crashed server will never read the files again.
+      this.removeRuntimeImages(runtime);
       this.emit(runtime, { type: "process_exit", workerId: spec.workerId, code, signal, unexpected: !runtime.stopping && (runtime.open || runtime.startingTurn || runtime.settled.size === 0) });
     }, this.options.requestTimeoutMs);
     this.runtimes.set(spec.workerId, runtime);
@@ -104,7 +171,7 @@ export class CodexAdapter implements AgentAdapter {
       runtime.path = typeof thread.path === "string" ? thread.path : undefined;
       // Await actual persistence, including when the thread has no rollout path yet.
       await spec.onSession?.(runtime.path ?? null, null, thread.id);
-      await this.startTurn(runtime, spec.prompt, spec.commandId);
+      await this.startTurn(runtime, spec.prompt, spec.commandId, spec.images);
       const handle = { workerId: spec.workerId, sessionId: thread.id, sessionFile: runtime.path, cwd: spec.cwd };
       setTimeout(() => {
         if (this.generations.get(spec.workerId) !== generation) return;
@@ -124,20 +191,33 @@ export class CodexAdapter implements AgentAdapter {
       excludeTmpdirEnvVar: true, excludeSlashTmp: true,
     };
   }
-  private async startTurn(runtime: Runtime, text: string, commandId?: string): Promise<void> {
+  /** Text first, then one `localImage` entry per file, matching the app-server 0.167.0 schema. */
+  private input(text: string, paths: readonly string[]): Array<{ type: string; text?: string; path?: string }> {
+    return [{ type: "text", text }, ...paths.map((path) => ({ type: "localImage", path }))];
+  }
+  private async startTurn(runtime: Runtime, text: string, commandId?: string,
+    images?: readonly { data: string; mimeType: string }[]): Promise<void> {
     if (runtime.open || runtime.startingTurn) throw new AdapterError("session_in_use", "Codex already has an active turn");
     runtime.startingTurn = true; runtime.text = ""; runtime.finalText = ""; runtime.blocked = false; runtime.usage = undefined;
     runtime.activitySeen = false;
+    let paths: string[] = [];
     try {
+      paths = this.writeImages(runtime, images);
       if (commandId) await runtime.spec.onDelivery?.(commandId, "sending");
       const response = await runtime.rpc.request("turn/start", {
-        threadId: runtime.threadId, input: [{ type: "text", text }], approvalPolicy: "never",
+        threadId: runtime.threadId, input: this.input(text, paths), approvalPolicy: "never",
         cwd: runtime.spec.cwd, sandboxPolicy: this.policy(runtime), outputSchema: CODEX_REPORT_SCHEMA,
       });
       if (typeof response?.turn?.id !== "string") throw new AdapterError("protocol_error", "Codex did not return a turn id");
       runtime.turnId = response.turn.id; runtime.open = true; runtime.turn++;
       if (commandId) await runtime.spec.onDelivery?.(commandId, "delivered", runtime.turnId);
     } catch (error) {
+      // Only a proven pre-execution rejection means nobody will read these files. Any other
+      // failure may still be a running turn; its terminal or stop removes them.
+      if (error instanceof CodexRpcError && error.rejectedBeforeExecution) {
+        this.removeImages(paths);
+        for (const path of paths) runtime.images.delete(path);
+      }
       if (commandId && error instanceof CodexRpcError && error.rejectedBeforeExecution) {
         await runtime.spec.onDelivery?.(commandId, "not_delivered");
       }
@@ -152,16 +232,20 @@ export class CodexAdapter implements AgentAdapter {
 
   async send(id: string, input: { text: string; images?: { data: string; mimeType: string }[]; commandId?: string }, how: Delivery): Promise<{ effect?: string }> {
     const runtime = this.require(id);
-    if (input.images?.length) throw new AdapterError("unsupported_capability", "Codex images are unsupported");
     if (how === "follow_up") throw new AdapterError("unsupported_capability", "After messages belong to the manager's durable queue");
-    if (!runtime.open) { await this.startTurn(runtime, input.text, input.commandId); return {}; }
+    if (!runtime.open) { await this.startTurn(runtime, input.text, input.commandId, input.images); return {}; }
     if (how !== "steer" || !runtime.turnId) throw new AdapterError("session_in_use", "Codex has an active turn");
     await this.awaitControlReady(runtime);
     if (!runtime.open) throw new AdapterError("turn_ended", "The target Codex turn ended before steer was sent; send a new prompt after its report", true);
+    const paths = this.writeImages(runtime, input.images);
     if (input.commandId) await runtime.spec.onDelivery?.(input.commandId, "sending");
     try {
-      await runtime.rpc.request("turn/steer", { threadId: runtime.threadId, expectedTurnId: runtime.turnId, input: [{ type: "text", text: input.text }] });
+      await runtime.rpc.request("turn/steer", { threadId: runtime.threadId, expectedTurnId: runtime.turnId, input: this.input(input.text, paths) });
     } catch (error) {
+      if (error instanceof CodexRpcError && error.rejectedBeforeExecution) {
+        this.removeImages(paths);
+        for (const path of paths) runtime.images.delete(path);
+      }
       if (input.commandId && error instanceof CodexRpcError && error.rejectedBeforeExecution) {
         await runtime.spec.onDelivery?.(input.commandId, "not_delivered");
       }
@@ -227,6 +311,7 @@ export class CodexAdapter implements AgentAdapter {
         });
       }
       await killOrphans(descendants, { graceMs: this.options.stopGraceMs ?? 500 });
+      this.removeRuntimeImages(runtime);
       if (this.runtimes.get(id) === runtime) this.runtimes.delete(id);
     })();
     return runtime.stopPromise;
@@ -282,6 +367,8 @@ export class CodexAdapter implements AgentAdapter {
     }
     if (message.method !== "turn/completed") return;
     runtime.settled.add(turnId); runtime.open = false;
+    // The terminal turn has consumed every input it accepted, steers included.
+    this.removeRuntimeImages(runtime);
     for (const done of runtime.controlWaiters) done();
     for (const done of runtime.terminalWaiters) done();
     const status = p.turn?.status;

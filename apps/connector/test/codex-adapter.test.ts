@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { CodexAdapter, detectCodex } from "../src/codex-adapter.ts";
 import type { RawAdapterEvent, StartSpec } from "../src/agent.ts";
 import { tmpDir, waitFor } from "./helpers.ts";
@@ -8,6 +8,11 @@ import { pidAlive, processStartTime } from "../src/locks.ts";
 
 const adapters: CodexAdapter[] = [];
 afterEach(async () => { for (const a of adapters.splice(0)) for (const p of a.workerPids()) await a.stopProcess(p.workerId); });
+// A 1x1 PNG: real bytes, so the file the app-server receives can be compared exactly.
+const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+const PNG_BYTES = Buffer.from(PNG_BASE64, "base64");
+const imageInput = (requests: Array<{ method?: string; params?: any }>, method: string) =>
+  requests.filter((r) => r.method === method).flatMap((r) => (r.params?.input ?? []).filter((item: any) => item?.type === "localImage"));
 function setup(options = {}) {
   const dir = tmpDir("codex-adapter");
   const command = [process.execPath, join(import.meta.dirname, "fake-codex.mjs")];
@@ -183,6 +188,108 @@ describe("Codex app-server", () => {
     } finally {
       if (identity && processStartTime(pid) === identity) { try { process.kill(pid, "SIGKILL"); } catch {} }
     }
+  });
+  it("passes attached images as owner-only localImage files and keeps text first", async () => {
+    const t = setup({ hold: true });
+    expect(t.adapter.capabilities.images).toBe(true);
+    t.spec.images = [{ data: PNG_BASE64, mimeType: "image/png" }];
+    await t.adapter.start(t.spec);
+    const input = t.requests().find((r) => r.method === "turn/start").params.input;
+    expect(input[0]).toEqual({ type: "text", text: "compute 42" });
+    expect(input).toHaveLength(2);
+    const path: string = input[1].path;
+    expect(input[1]).toEqual({ type: "localImage", path });
+    expect(path.endsWith(".png")).toBe(true);
+    // Never inside the assigned directory (a repository checkout or worktree).
+    expect(path.startsWith(`${t.dir}/`)).toBe(false);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(statSync(dirname(path)).mode & 0o777).toBe(0o700);
+    expect(readFileSync(path)).toEqual(PNG_BYTES);
+    // The app-server saw the file itself, not an already-deleted path.
+    const recorded = readFileSync(join(t.dir, "images.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(recorded).toEqual([{ method: "turn/start", turnId: "turn-1", images: [{ path, exists: true, size: PNG_BYTES.length }] }]);
+    await t.adapter.interrupt(t.spec.workerId);
+    await waitFor(() => t.events.find((e) => e.type === "settled"));
+    expect(existsSync(path)).toBe(false);
+  });
+  it("keeps the pure-text turn input unchanged", async () => {
+    const t = setup(); await t.adapter.start(t.spec);
+    expect(t.requests().find((r) => r.method === "turn/start").params.input).toEqual([{ type: "text", text: "compute 42" }]);
+    expect(existsSync(join(t.dir, "images.jsonl"))).toBe(false);
+    await waitFor(() => t.events.find((e) => e.type === "settled"));
+  });
+  it("steers with images and removes them when the turn ends", async () => {
+    const t = setup({ hold: true }); await t.adapter.start(t.spec);
+    await t.adapter.send(t.spec.workerId, { text: "look at this", images: [{ data: PNG_BASE64, mimeType: "image/png" }], commandId: "img-steer" }, "steer");
+    const input = t.requests().find((r) => r.method === "turn/steer").params.input;
+    expect(input[0]).toEqual({ type: "text", text: "look at this" });
+    const path: string = input[1].path;
+    expect(input[1]).toEqual({ type: "localImage", path });
+    expect(existsSync(path)).toBe(true);
+    expect(readFileSync(join(t.dir, "images.jsonl"), "utf8")).toContain('"exists":true');
+    await t.adapter.interrupt(t.spec.workerId);
+    await waitFor(() => t.events.find((e) => e.type === "settled"));
+    expect(existsSync(path)).toBe(false);
+  });
+  it("removes image files on stop and on an unexpected process exit", async () => {
+    const stopped = setup({ hold: true });
+    stopped.spec.images = [{ data: PNG_BASE64, mimeType: "image/png" }];
+    await stopped.adapter.start(stopped.spec);
+    const stoppedPath: string = imageInput(stopped.requests(), "turn/start")[0].path;
+    expect(existsSync(stoppedPath)).toBe(true);
+    await stopped.adapter.stopProcess(stopped.spec.workerId);
+    expect(existsSync(stoppedPath)).toBe(false);
+
+    const crashed = setup({ hold: true });
+    crashed.spec.images = [{ data: PNG_BASE64, mimeType: "image/png" }];
+    await crashed.adapter.start(crashed.spec);
+    const crashedPath: string = imageInput(crashed.requests(), "turn/start")[0].path;
+    crashed.adapter.simulateCrash();
+    await waitFor(() => crashed.events.find((e) => e.type === "process_exit"));
+    expect(existsSync(crashedPath)).toBe(false);
+  });
+  it("removes the files when Codex rejects the turn before execution", async () => {
+    const t = setup({ rejectStart: -32602 });
+    t.spec.images = [{ data: PNG_BASE64, mimeType: "image/png" }];
+    await expect(t.adapter.start(t.spec)).rejects.toMatchObject({ rpcCode: -32602 });
+    const path: string = imageInput(t.requests(), "turn/start")[0].path;
+    expect(existsSync(path)).toBe(false);
+  });
+  it("refuses image types or bytes Codex cannot read before any turn starts", async () => {
+    const svg = setup({});
+    svg.spec.images = [{ data: PNG_BASE64, mimeType: "image/svg+xml" }];
+    await expect(svg.adapter.start(svg.spec)).rejects.toMatchObject({ code: "unsupported_capability" });
+    expect(svg.requests().some((r) => r.method === "turn/start")).toBe(false);
+    const empty = setup({});
+    empty.spec.images = [{ data: "", mimeType: "image/png" }];
+    await expect(empty.adapter.start(empty.spec)).rejects.toMatchObject({ code: "invalid_image" });
+    expect(empty.requests().some((r) => r.method === "turn/start")).toBe(false);
+  });
+  it("purges leftover image files at connector startup", () => {
+    const stateDir = tmpDir("codex-images-boot");
+    const imageDir = join(stateDir, "codex-images");
+    mkdirSync(imageDir, { recursive: true, mode: 0o755 });
+    const leftover = join(imageDir, "leftover.png");
+    writeFileSync(leftover, PNG_BYTES, { mode: 0o644 });
+    const adapter = new CodexAdapter({ stateDir, command: [process.execPath, join(import.meta.dirname, "fake-codex.mjs")], stopGraceMs: 20 });
+    adapters.push(adapter);
+    expect(existsSync(leftover)).toBe(false);
+    expect(readdirSync(imageDir)).toEqual([]);
+    expect(statSync(imageDir).mode & 0o777).toBe(0o700);
+  });
+  it("keeps image files under the connector state directory when configured", async () => {
+    const stateDir = tmpDir("codex-images-state");
+    const cwd = tmpDir("codex-images-cwd");
+    const adapter = new CodexAdapter({ command: [process.execPath, join(import.meta.dirname, "fake-codex.mjs")],
+      env: { FAKE_CODEX_DIR: cwd, FAKE_CODEX_OPTIONS: JSON.stringify({ hold: true }) }, stateDir, requestTimeoutMs: 1000, stopGraceMs: 20 });
+    adapters.push(adapter);
+    await adapter.start({ workerId: "w-state", threadId: "t", cwd, mode: "write", prompt: "look",
+      commandId: "state-1", images: [{ data: PNG_BASE64, mimeType: "image/png" }] });
+    const path: string = imageInput(readFileSync(join(cwd, "requests.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line)), "turn/start")[0].path;
+    expect(dirname(path)).toBe(join(stateDir, "codex-images"));
+    expect(existsSync(path)).toBe(true);
+    await adapter.stopProcess("w-state");
+    expect(existsSync(path)).toBe(false);
   });
   it("detects only supported CLI metadata and missing commands", () => {
     const t = setup(); expect(detectCodex(t.command).installed).toBe(true);
