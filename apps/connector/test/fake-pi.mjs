@@ -195,6 +195,7 @@ async function handle(command) {
         sessionId,
         sessionFile,
         isStreaming: false,
+        model: scenario.model ?? { provider: "fake", id: "fake-vision", input: ["text", "image"] },
       });
       return;
     }
@@ -211,7 +212,7 @@ async function handle(command) {
         appendSessionEntry({ type: "custom", customType: "sig.command", data: { commandId, at: Date.now() } });
         appendSessionEntry({ type: "message", message: { role: "user", content: text, timestamp: Date.now() } });
       }
-      logPrompt({ commandId, text, cwd: process.cwd(), sessionId, pid: process.pid, at: Date.now() });
+      logPrompt({ commandId, text, images: command.images ?? undefined, cwd: process.cwd(), sessionId, pid: process.pid, at: Date.now() });
       const run = scenario.runs?.[nextRunIndex()] ?? [];
       const failure = run.find((step) => typeof step.fail === "string");
       if (failure) {
@@ -238,12 +239,12 @@ async function handle(command) {
         appendSessionEntry({ type: "custom", customType: "sig.command", data: { commandId, at: Date.now() } });
         appendSessionEntry({ type: "message", message: { role: "user", content: delivered, timestamp: Date.now() } });
         (command.type === "steer" ? steeringQueue : followUpQueue).push(delivered);
-        logPrompt({ type: command.type, text: delivered, at: Date.now() });
+        logPrompt({ type: command.type, text: delivered, images: command.images ?? undefined, at: Date.now() });
         respond(id, command.type, { disposition: "queued" });
         return;
       }
       (command.type === "steer" ? steeringQueue : followUpQueue).push(text);
-      logPrompt({ type: command.type, text, at: Date.now() });
+      logPrompt({ type: command.type, text, images: command.images ?? undefined, at: Date.now() });
       respond(id, command.type, { disposition: "queued" });
       return;
     }

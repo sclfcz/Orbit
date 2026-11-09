@@ -60,7 +60,7 @@ describe("HelloMessageSchema", () => {
 });
 
 describe("ErrorMessageSchema attachment refusals (ADR-0014)", () => {
-  it.each(["duplicate_attachment", "too_many_attachments", "attachment_not_found", "attachments_not_allowed", "unsupported_capability", "upgrade_required"])(
+  it.each(["duplicate_attachment", "too_many_attachments", "attachment_not_found", "attachment_unavailable", "attachments_not_allowed", "unsupported_capability", "upgrade_required", "model_no_image_input"])(
     "accepts %s",
     (code) => {
       expect(ErrorMessageSchema.safeParse({ t: "error", re: "wc-1", code, message: "x", retriable: false }).success).toBe(true);

@@ -14,6 +14,7 @@ import { collectGitFacts } from "./git-facts.ts";
 import { openPr, PrError, type PrExec } from "./pr.ts";
 import { acquireLock, isLockHeld, markLocksHeldByDeadProcess, pidAlive, processStartTime, releaseLock, removeStaleLocks } from "./locks.ts";
 import { RESUME_PROMPT, PiAdapter } from "./pi-adapter.ts";
+import { AttachmentFetcher, AttachmentFetchError, type FetchedAttachment } from "./attachment-fetch.ts";
 import { externalActivity, inspectCommandDelivery, observeSession } from "./session-observation.ts";
 import { codexSessionPath, inspectCodexTail, observeCodexSession } from "./codex-session.ts";
 import { findSessionHolders } from "./session-holders.ts";
@@ -21,7 +22,7 @@ import { ProgressThrottle } from "./progress.ts";
 import { inspectSessionTail, type SessionTail } from "./session-tail.ts";
 import { readSessionHistory } from "./session-history.ts";
 import { readFullSessionHistory, claudeSessionPath } from "./full-session-history.ts";
-import type { HistoryPage } from "@alexlikevibe/protocol";
+import type { HistoryPage, ImageAttachmentRef } from "@alexlikevibe/protocol";
 import type { LocalStore, RegisteredRepo, WorkerRow } from "./store.ts";
 import { StallWatchdog, stallContinueNote, type StallWatchdogOptions, type WatchdogCandidate } from "./watchdog.ts";
 import { WorktreeManager, createReadonlyWorktree } from "./worktree.ts";
@@ -58,6 +59,7 @@ export interface SendArgs {
   text: string;
   intent: "now" | "after" | "auto";
   images?: { data: string; mimeType: string }[];
+  attachments?: ImageAttachmentRef[];
 }
 
 export interface SendResult {
@@ -93,6 +95,7 @@ interface PendingSend {
   text: string;
   intent: SendArgs["intent"];
   images?: { data: string; mimeType: string }[];
+  attachments?: ImageAttachmentRef[];
   resolve: (result: SendResult) => void;
   reject: (err: CommandError) => void;
 }
@@ -102,6 +105,7 @@ interface DeferredSend {
   commandId: string;
   text: string;
   images?: { data: string; mimeType: string }[];
+  attachments?: ImageAttachmentRef[];
 }
 
 const DEFAULT_IDLE_RECLAIM_MS = 10 * 60_000;
@@ -183,6 +187,10 @@ export interface WorkerManagerOptions {
   onExpectMarker?: (cmdId: string, meta: { sessionFile: string | null; afterEntryId: string | null }) => void;
   /** Stall-watchdog knobs (tests shrink timers and inject CPU samples). */
   watchdog?: StallWatchdogOptions;
+  /** ADR-0014: the fetch seam; tests inject a fetcher or a fetch implementation. */
+  attachmentFetcher?: AttachmentFetcher;
+  fetchImpl?: typeof fetch;
+  log?: (event: string, fields: Record<string, unknown>) => void;
 }
 
 /** workerId must satisfy pi's --session-id restrictions (§4.2). */
@@ -258,6 +266,7 @@ export class WorkerManager {
 
   // --- stall watchdog (issue #13) -----------------------------------------------------------
   private readonly watchdog: StallWatchdog;
+  private readonly attachments: AttachmentFetcher;
   /**
    * The original task prompt per worker, so a stall respawn can resend it with the
    * continuation note. Survives process_exit (the process dies before the respawn); a new
@@ -293,6 +302,12 @@ export class WorkerManager {
       candidates: () => this.watchdogCandidates(),
       onStrike: (workerId, strike, why) => this.handleStallStrike(workerId, strike, why),
     });
+    this.attachments = options.attachmentFetcher ?? new AttachmentFetcher({
+      stateDir: options.stateDir,
+      credentials: () => this.store.getCredentials(),
+      ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+      ...(options.log ? { log: options.log } : {}),
+    });
     for (const adapter of this.adapters.values()) {
       adapter.on("worker-event", (event) => {
         void this.onAdapterEvent(event).catch((err) => {
@@ -304,7 +319,12 @@ export class WorkerManager {
   }
 
   get agents() {
-    return [...this.adapters.values()].map((a) => ({ kind: a.kind, version: a.version, capabilities: a.capabilities }));
+    return [...this.adapters.values()].map((a) => ({
+      kind: a.kind,
+      version: a.version,
+      capabilities: a.capabilities,
+      ...(a.kind === "pi" ? { imageInput: "reference" as const } : {}),
+    }));
   }
 
   /** The adapter for an agent kind; unknown kinds fail loudly (never silently fall back —
@@ -1051,35 +1071,109 @@ export class WorkerManager {
         );
       }
     }
-    const canSteerNow = args.intent !== "after" && worker.state === "running" &&
-      this.adapterOfWorker(worker).capabilities.steer && this.adapterOfWorker(worker).isStreaming?.(worker.workerId);
-    if (this.store.deferred(args.workerId).length > 0 && !canSteerNow) {
-      return this.deferSendUntilRunEnd(worker, commandId, args, "follow_up");
+    const hasAttachments = Boolean(args.attachments?.length);
+    if (hasAttachments) {
+      const owner = this.adapterOfWorkerOrNull(worker);
+      if (!owner || !owner.capabilities.images) {
+        throw new CommandError(
+          "unsupported_capability",
+          `agent '${worker.agent ?? "pi"}' cannot take images; send text only or dispatch to another agent`,
+        );
+      }
     }
-    this.cancelIdleReclaim(args.workerId); // the send revives the worker
-    if (worker.state === "starting" || worker.state === "recovering" || worker.state === "lost") {
-      // §6.2 queue rows: hold until startup/resume completes (or an interrupt supersedes).
-      return new Promise<SendResult>((resolve, reject) => {
-        const queue = this.pendingSends.get(args.workerId) ?? [];
-        this.pendingSends.set(args.workerId, queue);
-        queue.push({
-          commandId,
-          text: args.text,
-          intent: args.intent,
-          images: args.images,
-          resolve,
-          reject,
+    let preparedFiles: FetchedAttachment[] | undefined;
+    if (hasAttachments) {
+      try {
+        preparedFiles = await this.attachments.fetchAll(args.attachments!);
+      } catch (error) {
+        if (error instanceof AttachmentFetchError) {
+          throw new CommandError("attachment_unavailable", error.message, false);
+        }
+        throw new CommandError("attachment_unavailable", error instanceof Error ? error.message : String(error), false);
+      }
+    }
+    try {
+      const canSteerNow = args.intent !== "after" && worker.state === "running" &&
+        this.adapterOfWorker(worker).capabilities.steer && this.adapterOfWorker(worker).isStreaming?.(worker.workerId);
+      if (this.store.deferred(args.workerId).length > 0 && !canSteerNow) {
+        this.attachments.cleanup(preparedFiles ?? []);
+        return this.deferSendUntilRunEnd(worker, commandId, {
+          ...args,
+          images: hasAttachments ? undefined : args.images,
+        }, "follow_up");
+      }
+      this.cancelIdleReclaim(args.workerId); // the send revives the worker
+      if (worker.state === "starting" || worker.state === "recovering" || worker.state === "lost") {
+        // §6.2 queue rows: hold until startup/resume completes (or an interrupt supersedes).
+        this.attachments.cleanup(preparedFiles ?? []);
+        return new Promise<SendResult>((resolve, reject) => {
+          const queue = this.pendingSends.get(args.workerId) ?? [];
+          this.pendingSends.set(args.workerId, queue);
+          queue.push({
+            commandId,
+            text: args.text,
+            intent: args.intent,
+            images: hasAttachments ? undefined : args.images,
+            attachments: args.attachments,
+            resolve,
+            reject,
+          });
         });
+      }
+      return this.deliverSend(worker, commandId, {
+        ...args,
+        images: hasAttachments ? undefined : args.images,
+        preparedFiles,
       });
+    } catch (error) {
+      this.attachments.cleanup(preparedFiles ?? []);
+      throw error;
     }
-    return this.deliverSend(worker, commandId, args);
   }
 
   /** The state table's delivery cells for idle/running workers (§6.2). */
   private async deliverSend(
     worker: WorkerRow,
     commandId: string,
-    input: { text: string; intent: SendArgs["intent"]; images?: SendArgs["images"] },
+    input: {
+      text: string;
+      intent: SendArgs["intent"];
+      images?: SendArgs["images"];
+      attachments?: ImageAttachmentRef[];
+      preparedFiles?: FetchedAttachment[];
+    },
+  ): Promise<SendResult> {
+    let files = input.preparedFiles;
+    if (input.attachments?.length && !files) {
+      try {
+        files = await this.attachments.fetchAll(input.attachments);
+      } catch (error) {
+        throw new CommandError("attachment_unavailable", error instanceof Error ? error.message : String(error), false);
+      }
+    }
+    let attached: { type: "image"; data: string; mimeType: string }[] = [];
+    try {
+      attached = files ? await this.attachments.readForPi(files) : [];
+    } catch (error) {
+      this.attachments.cleanup(files ?? []);
+      throw new CommandError("attachment_unavailable", error instanceof Error ? error.message : String(error), false);
+    }
+    try {
+      return await this.deliverSendCore(worker, commandId, {
+        text: input.text,
+        intent: input.intent,
+        images: [...(input.images ?? []), ...attached],
+        ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+      });
+    } finally {
+      if (files) this.attachments.cleanup(files);
+    }
+  }
+
+  private async deliverSendCore(
+    worker: WorkerRow,
+    commandId: string,
+    input: { text: string; intent: SendArgs["intent"]; images?: SendArgs["images"]; attachments?: ImageAttachmentRef[] },
   ): Promise<SendResult> {
     worker = this.requireWorker(worker.workerId);
     this.guardDelivery(worker);
@@ -1098,7 +1192,8 @@ export class WorkerManager {
           commandId,
           text: input.text,
           intent: input.intent,
-          images: input.images,
+          images: input.attachments?.length ? undefined : input.images,
+          attachments: input.attachments,
           resolve,
           reject,
         });
@@ -1258,7 +1353,7 @@ export class WorkerManager {
       this.active.delete(workerId);
       if (!this.stopRequested.has(workerId)) {
         this.store.setWorkerState(workerId, "idle");
-        this.armIdleReclaim(workerId);
+        if ((err as { code?: string }).code !== "model_no_image_input") this.armIdleReclaim(workerId);
       }
       const code = (err as { code?: string }).code ?? "startup_failed";
       const message = err instanceof Error ? err.message : String(err);
@@ -1461,10 +1556,14 @@ export class WorkerManager {
   private async deferSendUntilRunEnd(
     worker: WorkerRow,
     commandId: string,
-    input: { text: string; images?: SendArgs["images"] },
+    input: { text: string; images?: SendArgs["images"]; attachments?: ImageAttachmentRef[] },
     how: Delivery,
   ): Promise<SendResult> {
-    this.store.queueDeferred(worker.workerId, commandId, input);
+    this.store.queueDeferred(worker.workerId, commandId, {
+      text: input.text,
+      images: input.attachments?.length ? undefined : input.images,
+      attachments: input.attachments,
+    });
     return {
       delivery: "queued", effect: "after_run_end",
       ...(how === "steer" ? { degraded: `${worker.agent ?? "pi"} cannot steer mid-run; queued durably until run end` } : {}),
@@ -1482,10 +1581,17 @@ export class WorkerManager {
       const worker = this.requireWorker(workerId);
       if (worker.state !== "idle" || this.serialSlotHeldByAnother(worker)) return;
       try {
-        await this.deliverSend(worker, send.commandId, { text: send.text, intent: "auto", images: send.images });
+        await this.deliverSend(worker, send.commandId, { text: send.text, intent: "auto", images: send.images, attachments: send.attachments });
         this.store.setDeferredState(send.commandId, "delivered");
         delivered = true;
       } catch (err) {
+        const deliveryCode = err instanceof CommandError || err instanceof AdapterError ? err.code : null;
+        if (deliveryCode === "attachment_unavailable" || deliveryCode === "model_no_image_input") {
+          await this.emitEvent(workerId, "queue_returned", { texts: [send.text], reason: deliveryCode });
+          this.store.setDeferredState(send.commandId, "returned");
+          delivered = true; // process the next FIFO entry after this one is returned
+          return;
+        }
         const current = this.store.deferred(workerId).find((v) => v.commandId === send.commandId);
         if (current?.state === "sending") {
           this.store.setDeferredState(send.commandId, "ambiguous");
@@ -1602,6 +1708,7 @@ export class WorkerManager {
    * retries the rest (§14 fault injection).
    */
   async reconcileStartup(): Promise<void> {
+    this.attachments.cleanupOrphans();
     for (const workerId of this.store.listOrphanSnapshots()) {
       if (this.store.getWorker(workerId)?.agent === "codex" && isLockHeld(this.stateDir, workerId)) continue;
       await this.cleanupOrphans(workerId).catch(() => undefined);
@@ -2504,6 +2611,36 @@ function parseImages(args: Record<string, unknown>): { data: string; mimeType: s
   }));
 }
 
+function parseAttachments(args: Record<string, unknown>): ImageAttachmentRef[] | undefined {
+  if (!("attachments" in args) || args.attachments === undefined) return undefined;
+  if (!Array.isArray(args.attachments)) throw new CommandError("bad_request", "attachments must be an array");
+  if (args.attachments.length > 4) throw new CommandError("bad_request", "at most 4 attachments are allowed");
+  const refs: ImageAttachmentRef[] = [];
+  const ids = new Set<string>();
+  let total = 0;
+  for (const raw of args.attachments) {
+    const ref = raw as Partial<ImageAttachmentRef> | null;
+    if (ref === null || typeof ref !== "object") throw new CommandError("bad_request", "invalid attachment reference");
+    if (typeof ref.id !== "string" || ref.id.length === 0 || ids.has(ref.id)) {
+      throw new CommandError("bad_request", "attachment ids must be present and unique");
+    }
+    if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(String(ref.mimeType))) {
+      throw new CommandError("bad_request", "unsupported attachment mime type");
+    }
+    if (!Number.isSafeInteger(ref.bytes) || (ref.bytes as number) <= 0 || (ref.bytes as number) > 3 * 1024 * 1024) {
+      throw new CommandError("bad_request", "attachment bytes are outside the 3 MiB limit");
+    }
+    if (typeof ref.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(ref.sha256)) {
+      throw new CommandError("bad_request", "attachment sha256 is invalid");
+    }
+    total += ref.bytes as number;
+    if (total > 6 * 1024 * 1024) throw new CommandError("bad_request", "attachments exceed the 6 MiB total limit");
+    ids.add(ref.id);
+    refs.push({ id: ref.id, mimeType: ref.mimeType as ImageAttachmentRef["mimeType"], bytes: ref.bytes as number, sha256: ref.sha256 });
+  }
+  return refs;
+}
+
 /** `send` (§6.1): `text, images?, intent` — intent defaults to `auto`. */
 function parseSendArgs(args: Record<string, unknown>, envelopeWorkerId: string | undefined): SendArgs {
   const intent = args.intent === "now" || args.intent === "after" ? args.intent : "auto";
@@ -2512,6 +2649,7 @@ function parseSendArgs(args: Record<string, unknown>, envelopeWorkerId: string |
     text: typeof args.text === "string" ? args.text : "",
     intent,
     images: parseImages(args),
+    attachments: parseAttachments(args),
   };
 }
 

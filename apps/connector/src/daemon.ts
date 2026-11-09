@@ -67,9 +67,11 @@ export async function runDaemon(options: DaemonOptions): Promise<DaemonHandle> {
   // agent for the WebSocket. Nothing rides on the service unit's environment.
   const resolved = resolveProxyConfig({ stored: store.getProxyConfig(), env: process.env });
   let wsAgent: import("./client.ts").ClientOptions["wsAgent"];
+  let fetchImpl: typeof fetch = fetch;
   if (resolved.config && !options.noProxy) {
     const application = applyProxy(resolved.config);
     wsAgent = application.wsAgentFor;
+    fetchImpl = application.fetch;
     logger.info("proxy_enabled", { ...proxyLogFields(resolved.config), source: resolved.source });
   }
 
@@ -87,6 +89,7 @@ export async function runDaemon(options: DaemonOptions): Promise<DaemonHandle> {
     adapter: options.adapter,
     WebSocketImpl: options.WebSocketImpl,
     wsAgent,
+    fetchImpl,
     log: (event, fields) => logger.info(event, fields),
     onWelcome: () => {
       abnormalCloses = 0; // a clean handshake proves the path works

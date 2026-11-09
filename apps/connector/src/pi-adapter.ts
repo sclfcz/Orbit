@@ -90,6 +90,16 @@ interface WorkerRuntime {
   buffered: RawAdapterEvent[] | null;
 }
 
+function assertImageModel(state: { model?: { input?: unknown } }): void {
+  const input = state.model?.input;
+  if (!Array.isArray(input) || !input.includes("image")) {
+    throw new AdapterError(
+      "model_no_image_input",
+      "当前 Pi 模型不支持图片，请切换模型或去掉图片。",
+    );
+  }
+}
+
 export class PiAdapter implements AgentAdapter {
   readonly kind = "pi" as const;
   readonly capabilities = PI_CAPABILITIES;
@@ -189,6 +199,7 @@ export class PiAdapter implements AgentAdapter {
           `sessionId mismatch: expected ${spec.workerId}, got ${String(state.sessionId)}`,
         );
       }
+      if (spec.images?.length) assertImageModel(state);
       const sessionFile = typeof state.sessionFile === "string" ? state.sessionFile : null;
       // §6.3/§10: the session file and its current tail are on record BEFORE the prompt is
       // sent, so a crash anywhere past this point leaves decidable evidence (the marker
@@ -244,6 +255,10 @@ export class PiAdapter implements AgentAdapter {
     how: Delivery,
   ): Promise<{ effect?: string }> {
     const runtime = this.require(id);
+    if (input.images?.length) {
+      const state = await runtime.process.rpc({ type: "get_state" }, this.options.getStateTimeoutMs ?? 5000);
+      assertImageModel(state);
+    }
     const images = input.images?.map((i) => ({ type: "image", data: i.data, mimeType: i.mimeType }));
     if (how === "prompt") {
       // A prompt-path send goes through the same `/sig` wrapper as the initial prompt,

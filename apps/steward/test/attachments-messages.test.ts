@@ -82,6 +82,16 @@ async function waitWorkspaceAttachment(cookie: string, msgId: string, state: str
   }
 }
 
+async function waitFor<T>(get: () => Promise<T>, timeoutMs = 8000, what = "condition"): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await get();
+    if (value) return value;
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
 async function counts(): Promise<{ attachments: number; links: number; inbound: number; outbox: number }> {
   return runInDurableObject(ownerStub(), (instance: Steward) => {
     const sql = (instance as unknown as { sql: (strings: TemplateStringsArray) => Array<{ n: number }> }).sql.bind(instance);
@@ -418,4 +428,42 @@ describe("main composer attachments", { timeout: 30_000 }, () => {
     ws.close();
     fake.close();
   }, 30_000);
+
+  it("surfaces an attachment failure on the main reply path", async () => {
+    const { fake, workerId } = await runningWorker({ name: "mac-fail", imageInput: true });
+    await fake.emit("report", workerId, {
+      type: "report",
+      status: "needs_decision",
+      summary: "需要图片",
+      question: "看哪张图？",
+    });
+    const deadline = Date.now() + 8000;
+    let qid = "";
+    for (;;) {
+      const snap = await ownerStub().debugSnapshot();
+      const q = snap.questions.find((item) => item.workerId === workerId && item.status === "open");
+      if (q) { qid = q.qid; break; }
+      if (Date.now() > deadline) throw new Error("question never opened");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    await scriptModel(fauxAssistantMessage([fauxText("(boom)")], { stopReason: "error", errorMessage: "down" }));
+    await waitRunsSettled();
+    await ownerStub().shrinkQuestionWindowForTest(0);
+    await ownerStub().sweepQuestionFallbackForTest();
+    await waitWhileOutboundPending();
+    const card = (await ownerStub().outboundRows(50)).find((row) => row.kind === "card" && row.questionId === qid);
+    const { cookie, csrf } = await browser();
+    const image = await upload(cookie, csrf);
+    const msgId = `web-${crypto.randomUUID()}`;
+    expect((await postMessage(cookie, csrf, { id: msgId, text: "这张", replyTo: card!.id, attachments: [image.id] })).status).toBe(202);
+    const send = (await fake.waitForCmds(2))[1]!;
+    fake.send({ t: "cmd_ack", re: send.id, status: "accepted" });
+    fake.send({ t: "cmd_result", re: send.id, ok: false, error: { code: "attachment_unavailable", message: "missing", retriable: false } });
+    const text = await waitFor(async () => {
+      await waitWhileOutboundPending();
+      return (await ownerStub().outboundRows(50)).find((row) => row.kind === "text" && row.status === "sent" && JSON.parse(row.payload as string).text.includes("图片暂时无法读取"));
+    }, 10_000, "main-path attachment failure");
+    expect(text).toBeTruthy();
+    fake.close();
+  }, 60_000);
 });

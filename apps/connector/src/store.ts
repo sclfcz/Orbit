@@ -11,7 +11,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { GitCapability, PlainCapability, RepoCapability } from "@alexlikevibe/protocol";
+import type { GitCapability, ImageAttachmentRef, PlainCapability, RepoCapability } from "@alexlikevibe/protocol";
 import type { ProcRef } from "./descendants.ts";
 import { normalizeProxyConfig, type ProxyConfig } from "./proxy.ts";
 import {
@@ -447,7 +447,11 @@ export class LocalStore {
     return row ? JSON.parse(row.ref) : null;
   }
 
-  queueDeferred(workerId: string, commandId: string, input: { text: string; images?: { data: string; mimeType: string }[] }): void {
+  queueDeferred(workerId: string, commandId: string, input: {
+    text: string;
+    images?: { data: string; mimeType: string }[];
+    attachments?: Array<{ id: string; mimeType: string; bytes: number; sha256: string }>;
+  }): void {
     this.db.prepare("INSERT OR IGNORE INTO deferred_send (commandId, workerId, input) VALUES (?, ?, ?)").run(commandId, workerId, JSON.stringify(input));
   }
 
@@ -598,6 +602,7 @@ export interface WorkerRow {
 export type DeferredSendState = "queued" | "sending" | "delivered" | "ambiguous" | "returning" | "returned";
 export interface DeferredSendRow {
   commandId: string; text: string; images?: { data: string; mimeType: string }[];
+  attachments?: ImageAttachmentRef[];
   state: DeferredSendState; sessionFile: string | null; afterEntryId: string | null;
 }
 

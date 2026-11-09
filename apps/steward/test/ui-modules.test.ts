@@ -218,7 +218,7 @@ describe("attachment client rules (ADR-0014)", () => {
   });
 
   it("maps every server refusal and attachment state to interface copy", () => {
-    for (const code of ["attachments_not_allowed", "attachment_not_found", "attachment_unavailable", "duplicate_attachment", "too_many_attachments", "too_large", "unsupported_media_type", "unsupported_capability", "upgrade_required", "storage_low", "id_conflict"]) {
+    for (const code of ["attachments_not_allowed", "attachment_not_found", "attachment_unavailable", "model_no_image_input", "duplicate_attachment", "too_many_attachments", "too_large", "unsupported_media_type", "unsupported_capability", "upgrade_required", "storage_low", "id_conflict"]) {
       expect(attachmentErrorKey(code), code).not.toBe("attachFailed");
     }
     expect(attachmentErrorKey("unknown")).toBe("attachFailed");

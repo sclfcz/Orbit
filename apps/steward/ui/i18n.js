@@ -72,6 +72,7 @@ export const STRINGS = {
   attachNotAllowed: ['Images can only be sent to a worker from its session, or as a reply to its open question.', '图片只能从 worker 会话发送，或用于回复它尚未处理的问题。'],
   attachNotFound: ['That image is no longer available. Choose it again.', '图片已不可用，请重新选择。'],
   attachUnavailable: ['The image could not be delivered. Send it again.', '图片没有送达，请重新发送。'],
+  attachModelNoImage: ['The current Pi model does not support images. Switch models or remove the image.', '当前 Pi 模型不支持图片，请切换模型或去掉图片。'],
   attachDuplicate: ['The same image was selected twice. Remove one and try again.', '同一张图片被重复选择，请移除一张后重试。'],
   attachTooMany: ['Attach at most 4 images.', '最多添加 4 张图片。'],
   attachTooLarge: ['Each image must be 3 MB or smaller.', '每张图片不能超过 3 MB。'],
