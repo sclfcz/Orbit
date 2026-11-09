@@ -296,6 +296,8 @@ pnpm --dir apps/connector typecheck
 
 ## F. 图片输入（暂缓，owner 先决定范围）
 
+范围已改为端到端，见 ADR-0014 和 issue #13。
+
 ### 现状
 
 - `CodexAdapter.start()` 收到图片时抛出 `unsupported_capability`，能力声明 `images: false`。
