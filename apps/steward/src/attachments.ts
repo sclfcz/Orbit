@@ -2,9 +2,7 @@
 // sh_attachment, bytes in 256 KiB sh_attachment_chunk rows, and every reference in
 // sh_attachment_link so a device can only read what a command addressed to it.
 //
-// The phase only writes lifecycle fields. The 24 h unreferenced / terminal+7 d /
-// ambiguous 30 d sweep belongs to phase 5; until then expiresAt already records the
-// right upper bound and reads refuse an expired row.
+// Lifecycle sweeps reclaim bytes only; metadata and links survive for expired history.
 import { ulid } from "@alexlikevibe/protocol";
 import type { ImageAttachmentMime, ImageAttachmentRef } from "@alexlikevibe/protocol";
 import { WorkspaceError } from "./workspace.ts";
@@ -14,6 +12,8 @@ export const ATTACHMENT_MAX_BYTES = 3 * 1024 * 1024;
 export const ATTACHMENT_MAX_COUNT = 4;
 export const ATTACHMENT_MAX_TOTAL_BYTES = 6 * 1024 * 1024;
 export const ATTACHMENT_CHUNK_BYTES = 256 * 1024;
+export const ATTACHMENT_SWEEP_BATCH = 64;
+export const ATTACHMENT_TERMINAL_RETENTION_MS = 7 * 24 * 60 * 60_000;
 export const ATTACHMENT_UNREFERENCED_TTL_MS = 24 * 60 * 60_000;
 /** The hard cap for an unresolved ambiguous intent (ADR-0014 decision 8). */
 export const ATTACHMENT_REFERENCED_HARD_CAP_MS = 30 * 24 * 60 * 60_000;
@@ -120,11 +120,27 @@ export type AttachmentSql = <T = Record<string, unknown>>(
   ...values: (string | number | boolean | null | Uint8Array | ArrayBuffer)[]
 ) => T[];
 
+export interface AttachmentSweepStats {
+  checked: number;
+  terminalWritten: number;
+  deleted: number;
+  freedBytes: number;
+  remaining: number;
+  durationMs: number;
+  /** Keyset continuation: waiting attachments must not starve later rows. */
+  nextCursor: string | null;
+}
+
+type DeletionReason = "unreferenced_24h" | "terminal_7d" | "hard_cap_30d" | "msg_only_7d";
+type AttachmentAudit = (event: "attachment_deleted" | "attachment_msg_only" | "attachment_sweep", detail: string) => void;
+
 export interface AttachmentStoreOptions {
   sql: AttachmentSql;
   transaction: <T>(fn: () => T) => T;
   now?: () => number;
   softBudgetBytes?: number;
+  audit?: AttachmentAudit;
+  continueSweep?: (afterId: string) => Promise<unknown>;
 }
 
 export class AttachmentStore {
@@ -132,12 +148,16 @@ export class AttachmentStore {
   readonly #transaction: <T>(fn: () => T) => T;
   readonly #now: () => number;
   #softBudgetBytes: number;
+  readonly #audit: AttachmentAudit;
+  readonly #continueSweep?: (afterId: string) => Promise<unknown>;
 
   constructor(options: AttachmentStoreOptions) {
     this.#sql = options.sql;
     this.#transaction = options.transaction;
     this.#now = options.now ?? Date.now;
     this.#softBudgetBytes = options.softBudgetBytes ?? ATTACHMENT_SOFT_BUDGET_BYTES;
+    this.#audit = options.audit ?? (() => {});
+    this.#continueSweep = options.continueSweep;
   }
 
   setSoftBudgetForTests(bytes: number): void {
@@ -159,7 +179,7 @@ export class AttachmentStore {
   }
 
   usedBytes(): number {
-    return this.#sql<{ n: number }>`SELECT COALESCE(SUM(bytes), 0) AS n FROM sh_attachment WHERE state != 'deleted'`[0]!.n;
+    return this.#sql<{ n: number }>`SELECT COALESCE(SUM(bytes), 0) AS n FROM sh_attachment WHERE state != 'deleted' AND expiresAt > ${this.#now()}`[0]!.n;
   }
 
   /**
@@ -178,6 +198,13 @@ export class AttachmentStore {
     const id = ulid();
     const now = this.#now();
     const expiresAt = now + ATTACHMENT_UNREFERENCED_TTL_MS;
+    // Physical pressure also triggers reclamation: expired-but-unswept chunks no longer
+    // count against the logical budget, but should not pile up behind ongoing uploads.
+    const allocated = this.#sql<{ n: number }>`SELECT COALESCE(SUM(bytes), 0) AS n FROM sh_attachment WHERE state != 'deleted'`[0]!.n;
+    if (allocated + input.bytes.byteLength > this.#softBudgetBytes) {
+      const stats = this.sweep(now, { expiredOnly: true });
+      if (stats.nextCursor) await this.#continueSweep?.(stats.nextCursor);
+    }
     try {
       this.#transaction(() => {
         // Re-check inside the transaction so two interleaved uploads cannot both spend the
@@ -231,19 +258,97 @@ export class AttachmentStore {
   /** Part of the enqueue transaction: the link and its lifecycle fields move together. */
   link(links: readonly AttachmentLink[]): void {
     const now = this.#now();
-    const expiresAt = now + ATTACHMENT_REFERENCED_HARD_CAP_MS;
     for (const item of links) {
       this.#sql`
         INSERT OR IGNORE INTO sh_attachment_link (attachmentId, refType, refId, targetDeviceId, createdAt)
         VALUES (${item.attachmentId}, ${item.refType}, ${item.refId}, ${item.targetDeviceId}, ${now})
       `;
+      const firstRef = this.#sql<{ ts: number }>`
+        SELECT MIN(createdAt) AS ts FROM sh_attachment_link WHERE attachmentId = ${item.attachmentId}
+      `[0]!.ts;
+      const hardCap = firstRef + ATTACHMENT_REFERENCED_HARD_CAP_MS;
+      // Missing outbox rows are conservatively unresolved, never proof of delivery.
+      const pending = item.refType === "cmd" && !this.#sql`
+        SELECT 1 FROM outbox WHERE cmdId = ${item.refId} AND state IN ('done', 'failed', 'expired')
+      `.length;
       this.#sql`
         UPDATE sh_attachment
-        SET state = 'referenced',
-            expiresAt = CASE WHEN expiresAt < ${expiresAt} THEN ${expiresAt} ELSE expiresAt END
+        SET expiresAt = CASE WHEN state = 'ready' OR ${pending ? 1 : 0} THEN ${hardCap} ELSE MIN(expiresAt, ${hardCap}) END,
+            terminalAt = CASE WHEN ${pending ? 1 : 0} THEN NULL ELSE terminalAt END,
+            state = 'referenced'
         WHERE id = ${item.attachmentId} AND state != 'deleted'
       `;
     }
+  }
+
+  /** One bounded pass; each attachment's lifecycle update and byte deletion are atomic.
+   * The hourly scan visits every live row, including non-expired rows whose commands may
+   * just have settled. Budget-pressure passes only reclaim already-expired rows. */
+  sweep(now = this.#now(), options: { afterId?: string; expiredOnly?: boolean } = {}): AttachmentSweepStats {
+    const started = Date.now();
+    const stats: AttachmentSweepStats = {
+      checked: 0, terminalWritten: 0, deleted: 0, freedBytes: 0, remaining: 0, durationMs: 0, nextCursor: null,
+    };
+    const ids = this.#sql<{ id: string }>`
+      SELECT id FROM sh_attachment WHERE state != 'deleted' AND id > ${options.afterId ?? ""}
+        AND (${options.expiredOnly ? 1 : 0} = 0 OR expiresAt <= ${now})
+      ORDER BY id LIMIT ${ATTACHMENT_SWEEP_BATCH + 1}
+    `;
+    const batch = ids.slice(0, ATTACHMENT_SWEEP_BATCH);
+    if (ids.length > ATTACHMENT_SWEEP_BATCH) stats.nextCursor = batch.at(-1)!.id;
+    for (const { id } of batch) {
+      const result = this.#transaction(() => {
+        const row = this.#sql<Row>`SELECT * FROM sh_attachment WHERE id = ${id}`[0]!;
+        const links = this.#sql<{ firstRef: number | null; cmdCount: number; pending: number }>`
+          SELECT MIN(l.createdAt) AS firstRef,
+            COALESCE(SUM(CASE WHEN l.refType = 'cmd' THEN 1 ELSE 0 END), 0) AS cmdCount,
+            COALESCE(SUM(CASE WHEN l.refType = 'cmd' AND (o.state IS NULL OR o.state NOT IN ('done', 'failed', 'expired')) THEN 1 ELSE 0 END), 0) AS pending
+          FROM sh_attachment_link l LEFT JOIN outbox o ON l.refType = 'cmd' AND o.cmdId = l.refId
+          WHERE l.attachmentId = ${id}
+        `[0]!;
+        let terminalAt = row.terminalAt;
+        let expiresAt = row.expiresAt;
+        let reason: DeletionReason = "unreferenced_24h";
+        let msgOnly = false;
+        if (links.firstRef === null) {
+          expiresAt = Math.min(expiresAt, row.createdAt + ATTACHMENT_UNREFERENCED_TTL_MS);
+        } else {
+          const hardCap = links.firstRef + ATTACHMENT_REFERENCED_HARD_CAP_MS;
+          if (links.pending > 0) {
+            terminalAt = null;
+            expiresAt = hardCap;
+          } else {
+            msgOnly = links.cmdCount === 0 && terminalAt === null;
+            terminalAt ??= links.cmdCount === 0 ? links.firstRef : now;
+            expiresAt = Math.min(expiresAt, terminalAt + ATTACHMENT_TERMINAL_RETENTION_MS, hardCap);
+          }
+          reason = expiresAt >= hardCap ? "hard_cap_30d" : links.cmdCount === 0 ? "msg_only_7d" : "terminal_7d";
+        }
+        this.#sql`UPDATE sh_attachment SET terminalAt = ${terminalAt}, expiresAt = ${expiresAt} WHERE id = ${id}`;
+        const deleted = expiresAt <= now;
+        if (deleted) {
+          this.#sql`DELETE FROM sh_attachment_chunk WHERE attachmentId = ${id}`;
+          this.#sql`UPDATE sh_attachment SET state = 'deleted' WHERE id = ${id}`;
+        }
+        return { row, terminalWritten: row.terminalAt === null && terminalAt !== null, msgOnly, deleted, reason };
+      });
+      stats.checked += 1;
+      if (result.terminalWritten) stats.terminalWritten += 1;
+      // Emit only committed metadata, never chunks, base64, tokens or request URLs.
+      const metadata = { attachmentId: id, bytes: result.row.bytes, mimeType: result.row.mimeType };
+      if (result.msgOnly) this.#audit("attachment_msg_only", JSON.stringify({ ...metadata, count: 1 }));
+      if (result.deleted) {
+        stats.deleted += 1;
+        stats.freedBytes += result.row.bytes;
+        this.#audit("attachment_deleted", JSON.stringify({ ...metadata, reason: result.reason }));
+      }
+    }
+    stats.remaining = this.#sql<{ n: number }>`
+      SELECT COUNT(*) AS n FROM sh_attachment WHERE state != 'deleted' AND expiresAt <= ${now}
+    `[0]!.n;
+    stats.durationMs = Date.now() - started;
+    this.#audit("attachment_sweep", JSON.stringify(stats));
+    return stats;
   }
 
   /** A device may read only an attachment linked to a command addressed to that device. */

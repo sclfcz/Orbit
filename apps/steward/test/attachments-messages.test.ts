@@ -405,11 +405,16 @@ describe("main composer attachments", { timeout: 30_000 }, () => {
     });
     await waitWorkspaceAttachment(cookie, msgId, "failed");
 
-    await runInDurableObject(ownerStub(), (instance: Steward) => {
+    await runInDurableObject(ownerStub(), async (instance: Steward) => {
       const sql = (instance as unknown as { sql: (strings: TemplateStringsArray, ...values: unknown[]) => unknown }).sql.bind(instance);
       sql`UPDATE sh_attachment SET expiresAt = 0 WHERE id = ${image.id}`;
+      await instance.attachmentMaintenance();
+      expect(sql`SELECT * FROM sh_attachment_chunk WHERE attachmentId = ${image.id}`).toHaveLength(0);
     });
     const expired = await waitWorkspaceAttachment(cookie, msgId, "expired");
+    const expiredMetadata = { id: image.id, mimeType: "image/png", bytes: 64, state: "expired" };
+    expect(expired.messages.find((entry) => entry.id === `user:web:${msgId}`)?.attachments).toEqual([expiredMetadata]);
+    expect(expired.threads.flatMap((thread) => thread.timeline).find((entry) => entry.attachments?.some((a) => a.id === image.id))?.attachments).toEqual([expiredMetadata]);
     expect(JSON.stringify(expired)).not.toMatch(/data:image|iVBORw0KGgo|base64/);
     const snap = await ownerStub().debugSnapshot();
     expect(snap.questions.find((q) => q.qid === qid)).toMatchObject({ status: "answered" });

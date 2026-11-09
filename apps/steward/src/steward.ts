@@ -141,7 +141,7 @@ import type {
   MachineDirectoryRemovalResult,
   MachineDirectoryResult,
 } from "./workspace-api.ts";
-import { attachmentResponse } from "./workspace-api.ts";
+import { attachmentNotFoundResponse, attachmentResponse } from "./workspace-api.ts";
 import { WorkspaceStream } from "./workspace-stream.ts";
 import { WebApp, linkTargetForThread, loginLinkPolicyFromEnv, parseSessionCookie, verifyLinkToken } from "./web.ts";
 
@@ -268,6 +268,7 @@ const PROVENANCE_FIRE_FRESHNESS_MS = 10 * 60_000;
 // The steward's daily notes lifecycle pass (issue #19, steward.md §2.5) runs at 02:00 UTC:
 // one cron, idempotent by expression — armNotesMaintenance/notesMaintenance both use it.
 const NOTES_MAINTENANCE_CRON = "0 2 * * *";
+const ATTACHMENT_MAINTENANCE_CRON = "17 * * * *";
 
 // /pair brute-force lockout (protocol doc §5.2, issue #27): 5 failures lock the bucket —
 // per source IP and globally — for 15 minutes.
@@ -391,6 +392,7 @@ export class Steward extends Agent<Env> {
     // by expression — re-arming at boot dedups onto the same row and never postpones it,
     // so the chain cannot die (or drift) with an evicted isolate.
     this.armNotesMaintenance();
+    this.armAttachmentMaintenance();
     // Issue #28: the usage cursor is seeded FIRST — queued ahead of everything below that can
     // start a model call — so the first reading is the boot baseline (pi's history ≠ today's
     // spend, budget.ts observe()). Void: onStart must not gate startup on pi.
@@ -772,6 +774,8 @@ export class Steward extends Agent<Env> {
       sql: this.sql.bind(this) as unknown as import("./attachments.ts").AttachmentSql,
       transaction: (fn) => this.ctx.storage.transactionSync(fn),
       softBudgetBytes: this.attachmentBudgetBytes,
+      audit: (event, detail) => this.logChannel(event, detail),
+      continueSweep: (afterId) => this.schedule(3, "attachmentMaintenance", { afterId }),
     }));
   }
 
@@ -1288,7 +1292,7 @@ export class Steward extends Agent<Env> {
     }
     const download = this.attachments.readChunks(id);
     if (!download || !this.attachments.authorizedForDevice(id, parsed.deviceId)) {
-      return new Response("not found", { status: 404 });
+      return attachmentNotFoundResponse();
     }
     this.logChannel("attachment_device_read", `${id} ${download.bytes} ${download.mimeType}`);
     return attachmentResponse(id, download);
@@ -4577,6 +4581,22 @@ export class Steward extends Agent<Env> {
     void this.schedule(NOTES_MAINTENANCE_CRON, "notesMaintenance", undefined).catch((err) =>
       this.logChannel("notes_maintenance_arm_failed", errorText(err)),
     );
+  }
+
+  /** Cron deduplication is by expression and payload, like notes maintenance. A cold
+   * start never postpones the existing hourly pass; continuations persist their cursor. */
+  private armAttachmentMaintenance(): void {
+    void this.schedule(ATTACHMENT_MAINTENANCE_CRON, "attachmentMaintenance", undefined).catch(() =>
+      this.logChannel("attachment_maintenance_arm_failed", "schedule_failed"),
+    );
+  }
+
+  async attachmentMaintenance(payload?: { afterId: string }): Promise<void> {
+    this.armAttachmentMaintenance();
+    const stats = this.attachments.sweep(Date.now(), payload);
+    if (stats.nextCursor) {
+      await this.schedule(3, "attachmentMaintenance", { afterId: stats.nextCursor });
+    }
   }
 
   /** Test read: the notes-maintenance schedule row (empty before arming). */
