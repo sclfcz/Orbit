@@ -111,6 +111,8 @@ const ErrorCode = z.enum([
   // ADR-0014 attachment refusal codes surfaced to an open session view.
   "attachments_not_allowed",
   "attachment_not_found",
+  "duplicate_attachment",
+  "too_many_attachments",
   "unsupported_capability",
   "upgrade_required",
   // History relay (§6.6): the worker exists but has no session to read (connector-pi.md §11.4).

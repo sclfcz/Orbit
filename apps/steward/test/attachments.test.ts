@@ -15,6 +15,15 @@ import {
 const BASE = "https://example.com";
 const MAX = 3 * 1024 * 1024;
 
+/** Fast byte equality: a 3 MiB `toEqual` diff is what made this file time out in CI. */
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.byteLength !== b.byteLength) return false;
+  for (let i = 0; i < a.byteLength; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 function png(size: number): Uint8Array {
   const bytes = new Uint8Array(size);
   bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -92,7 +101,7 @@ beforeEach(async () => {
   await ownerStub().setAttachmentBudgetForTests(256 * 1024 * 1024);
 });
 
-describe("POST /app/api/attachments", () => {
+describe("POST /app/api/attachments", { timeout: 30_000 }, () => {
   it("accepts all four allowed types and returns metadata that matches the stored bytes", async () => {
     const { cookie, csrf } = await browser();
     for (const [type, bytes] of [
@@ -129,7 +138,9 @@ describe("POST /app/api/attachments", () => {
       const { id, sha256 } = (await res.json()) as { id: string; sha256: string };
       const got = await read(id, cookie);
       expect(got.status, name).toBe(200);
-      expect(new Uint8Array(await got.arrayBuffer()), name).toEqual(bytes);
+      const actual = new Uint8Array(await got.arrayBuffer());
+      expect(actual.byteLength, `${name} length`).toBe(bytes.byteLength);
+      expect(sameBytes(actual, bytes), `${name} bytes`).toBe(true);
       const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes.buffer as ArrayBuffer))].map((b) => b.toString(16).padStart(2, "0")).join("");
       expect(sha256, name).toBe(digest);
     }

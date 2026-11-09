@@ -3,6 +3,7 @@
 import { SELF, runInDurableObject } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai/providers/faux";
+import { ErrorMessageSchema } from "@alexlikevibe/protocol";
 import type { Steward } from "../src/steward.ts";
 import {
   configureAndBind,
@@ -114,7 +115,7 @@ beforeEach(async () => {
   await ownerStub().setAttachmentBudgetForTests(256 * 1024 * 1024);
 });
 
-describe("session-view send with attachments", () => {
+describe("session-view send with attachments", { timeout: 30_000 }, () => {
   it("writes reference-only args and a cmd link", async () => {
     const { fake, workerId } = await runningWorker({ name: "mac-a", imageInput: true });
     const { cookie, csrf } = await browser();
@@ -211,9 +212,24 @@ describe("session-view send with attachments", () => {
     expect((await counts()).outbox).toBe(before.outbox);
     fake.close();
   }, 40_000);
+
+  it("returns duplicate_attachment through a schema-valid error frame", async () => {
+    const { fake, workerId } = await runningWorker({ name: "mac-dup", imageInput: true });
+    const { cookie, csrf } = await browser();
+    const image = await upload(cookie, csrf);
+    const before = await counts();
+    const { ws, reader } = await sendFromSession(cookie, workerId, "wc-dup", [image.id, image.id]);
+    const error = await reader.nextWhere((m) => m.t === "error" && m.re === "wc-dup");
+    expect(error.code).toBe("duplicate_attachment");
+    expect(ErrorMessageSchema.safeParse(error).success).toBe(true);
+    expect((await counts()).links).toBe(before.links);
+    expect((await counts()).outbox).toBe(before.outbox);
+    ws.close();
+    fake.close();
+  }, 30_000);
 });
 
-describe("main composer attachments", () => {
+describe("main composer attachments", { timeout: 30_000 }, () => {
   it("rejects ordinary messages and closed-report replies before sh_inbound/outbox/link", async () => {
     const { cookie, csrf } = await browser();
     const image = await upload(cookie, csrf);
