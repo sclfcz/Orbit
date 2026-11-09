@@ -2,6 +2,7 @@
 // Everything is built with h() from text nodes; image bytes only ever become blob: URLs.
 import { h, icon } from './dom.js';
 import { t } from './i18n.js';
+import { createBlobUrlCache } from './attachment-cache.js';
 import {
   attachmentErrorKey,
   attachmentStateKey,
@@ -9,39 +10,14 @@ import {
   validateAttachmentSelection,
 } from './attachment-model.js';
 
-const tracked = new Map(); // img/button node -> object URL
-let observer = null;
-
-function revoke(node) {
-  const url = tracked.get(node);
-  if (!url) return;
-  URL.revokeObjectURL(url);
-  tracked.delete(node);
-}
-
-function track(node, url) {
-  tracked.set(node, url);
-  if (typeof MutationObserver === 'undefined' || typeof document === 'undefined') return;
-  if (!observer) {
-    observer = new MutationObserver(() => {
-      for (const node of [...tracked.keys()]) {
-        if (!node.isConnected) revoke(node);
-      }
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-    window.addEventListener('pagehide', revokeAll);
-  }
-}
-
-function revokeAll() {
-  for (const node of [...tracked.keys()]) revoke(node);
-}
-
-async function fetchedBlobUrl(id) {
-  const response = await fetch(`/app/api/attachments/${encodeURIComponent(id)}`, { credentials: 'same-origin' });
-  if (!response.ok) throw new Error(`attachment ${response.status}`);
-  return URL.createObjectURL(await response.blob());
-}
+const attachmentCache = createBlobUrlCache({
+  load: async (id) => {
+    const response = await fetch(`/app/api/attachments/${encodeURIComponent(id)}`, { credentials: 'same-origin' });
+    if (!response.ok) throw new Error(`attachment ${response.status}`);
+    return response.blob();
+  },
+});
+if (typeof window !== 'undefined') window.addEventListener('pagehide', () => attachmentCache.clear());
 
 /** A lazy thumbnail: nothing is fetched until the image approaches the viewport. */
 function lazyImage(id, alt, onFailure) {
@@ -51,13 +27,7 @@ function lazyImage(id, alt, onFailure) {
     if (requested) return;
     requested = true;
     try {
-      const url = await fetchedBlobUrl(id);
-      if (!img.isConnected) {
-        URL.revokeObjectURL(url);
-        return;
-      }
-      track(img, url);
-      img.src = url;
+      img.src = await attachmentCache.get(id);
     } catch {
       requested = false;
       onFailure?.();
@@ -110,13 +80,12 @@ export function attachmentThumbnails(attachments, { className = '' } = {}) {
     }));
 }
 
-/** A same-page viewer. A remote image is fetched with the session and revoked on close. */
+/** A same-page viewer. A remote image comes from the page cache; the cache owns its URL. */
 export async function openAttachmentViewer({ id, url, mimeType }) {
   const body = h('div', { class: 'attachment-viewer-body' }, h('div', { class: 'attachment-loading', role: 'status' }, t('attachLoading')));
   const close = () => {
     document.removeEventListener('keydown', onKey);
     overlay.remove();
-    if (ownedUrl) URL.revokeObjectURL(ownedUrl);
   };
   const onKey = (event) => { if (event.key === 'Escape') close(); };
   const overlay = h('div', { class: 'attachment-viewer', role: 'dialog', 'aria-modal': 'true', 'aria-label': t('attachViewer') },
@@ -127,12 +96,10 @@ export async function openAttachmentViewer({ id, url, mimeType }) {
   document.addEventListener('keydown', onKey);
   document.body.append(overlay);
 
-  let ownedUrl = null;
   let src = null;
   if (id) {
     try {
-      ownedUrl = await fetchedBlobUrl(id);
-      src = ownedUrl;
+      src = await attachmentCache.get(id);
     } catch {
       src = url ?? null;
     }
@@ -143,7 +110,6 @@ export async function openAttachmentViewer({ id, url, mimeType }) {
     return;
   }
   if (!overlay.isConnected) {
-    if (ownedUrl) URL.revokeObjectURL(ownedUrl);
     return;
   }
   body.replaceChildren(h('img', { class: 'attachment-viewer-image', src, alt: t('attachImageAlt'), 'data-mime': mimeType ?? '' }));

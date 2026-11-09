@@ -51,10 +51,25 @@ export function attachmentStateKey(state) {
  */
 export function attachmentControl(imageInput, offline = false) {
   if (!imageInput) return { visible: false, enabled: false, messageKey: null };
-  if (imageInput === 'unsupported') return { visible: false, enabled: false, messageKey: 'attachUnsupportedAgent' };
+  if (imageInput === 'unsupported') return { visible: false, enabled: false, messageKey: null };
   if (imageInput === 'upgrade_required') return { visible: true, enabled: false, messageKey: 'attachUpgradeRequired' };
   if (offline) return { visible: true, enabled: false, messageKey: 'attachOffline' };
   return { visible: true, enabled: true, messageKey: null };
+}
+
+/**
+ * What refreshCompose may change. Deliberately has no status field: the session status line
+ * belongs to send/result handling, never to a redraw of capability hints.
+ */
+export function sessionComposeControls({ imageInput, offline, busy, text, draftReady }) {
+  const control = attachmentControl(imageInput);
+  return {
+    attachVisible: control.visible,
+    attachEnabled: control.enabled && !offline,
+    hintKey: control.visible ? control.messageKey : null,
+    sendDisabled: busy || offline || !text || !draftReady,
+    inputDisabled: busy || offline,
+  };
 }
 
 /** All selected images have been uploaded and the send button may include their ids. */

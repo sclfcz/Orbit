@@ -579,6 +579,7 @@ a.button { text-decoration: none; }
 .attach-button:disabled { opacity: .45; cursor: not-allowed; }
 .attach-button svg { width: 17px; height: 17px; }
 .attachment-hint { margin-top: 6px; font-size: 10px; color: #9a6b2f; }
+.attach-hint { font-size: 10px; color: #9a6b2f; }
 .attachment-drafts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .attachment-draft { position: relative; display: flex; align-items: center; gap: 6px; padding: 4px 26px 4px 4px; border: 1px solid #dfe6d5; border-radius: 7px; background: #fafbf6; max-width: 220px; }
 .attachment-draft-image { width: 42px; height: 42px; border-radius: 5px; object-fit: cover; flex-shrink: 0; }
@@ -609,6 +610,7 @@ a.button { text-decoration: none; }
 .attachment-error { color: #a4553a; }
 .sv-compose { flex-wrap: wrap; }
 .sv-compose .attachment-drafts { flex-basis: 100%; order: -1; margin: 0 0 4px; }
+.sv-compose .attach-hint { flex-basis: 100%; order: -1; margin: 0 0 4px; }
 .sv-attach { flex: 0 0 auto; }
 
 /* settings and pairing dialogs */

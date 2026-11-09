@@ -10,7 +10,7 @@ import { dayKey, formatClock, formatDay, formatRelative, formatUsd, parseInline,
 import { ACTION_KEYS, FATAL_COPY, KNOWN_TITLES, groupByDay, groupThreads, messagesFor, modelAfterProviderChange, thinkingAfterModelChange, availableChatModels, initialSetupStep, previewOf, summarize, threadMatches, withPending, workOn } from "../ui/model.js";
 import { cardView } from "../src/workspace.ts";
 import { attentionImageReply } from "../src/image-route.ts";
-import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT, ATTACHMENT_MAX_TOTAL_BYTES, attachmentControl, attachmentErrorKey, attachmentStateKey, attachmentsReady, validateAttachmentSelection } from "../ui/attachment-model.js";
+import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT, ATTACHMENT_MAX_TOTAL_BYTES, attachmentControl, attachmentErrorKey, attachmentStateKey, attachmentsReady, sessionComposeControls, validateAttachmentSelection } from "../ui/attachment-model.js";
 import type { ReportRow, WorkerRow } from "../src/ledger.ts";
 import { askUserCard, noteDecisionCard, offlineAskCard, reportCardFor, routineOfferCard, workerQuestionCard } from "../src/report-template.ts";
 
@@ -27,7 +27,7 @@ const asset = async (name: string): Promise<string> => (await fetchAsset(name)).
 // design §6) — it is included here for the sink scan and the import-export check (it has no
 // imports, so that check is a no-op for it) but NOT in the i18n-completeness scan below, whose
 // own file list is separate and intentionally does not reach it.
-const SCRIPTS = ["workspace.js", "model-picker.js", "dom.js", "format.js", "model.js", "i18n.js", "markup.js", "session.js", "session-model.js", "login.js", "attachment-model.js", "attachment-ui.js"];
+const SCRIPTS = ["workspace.js", "model-picker.js", "dom.js", "format.js", "model.js", "i18n.js", "markup.js", "session.js", "session-model.js", "login.js", "attachment-model.js", "attachment-ui.js", "attachment-cache.js"];
 
 /** The text between the parentheses of every call to `fn(…)` (not `x.fn(…)`, not `prefixfn(…)`). */
 function callArguments(source: string, fn: string): string[] {
@@ -204,10 +204,17 @@ describe("attachment client rules (ADR-0014)", () => {
 
   it("maps the capability states to a visible/enabled control", () => {
     expect(attachmentControl("ready")).toEqual({ visible: true, enabled: true, messageKey: null });
-    expect(attachmentControl("unsupported")).toEqual({ visible: false, enabled: false, messageKey: 'attachUnsupportedAgent' });
+    expect(attachmentControl("unsupported")).toEqual({ visible: false, enabled: false, messageKey: null });
     expect(attachmentControl("upgrade_required")).toEqual({ visible: true, enabled: false, messageKey: 'attachUpgradeRequired' });
     expect(attachmentControl("ready", true)).toEqual({ visible: true, enabled: false, messageKey: 'attachOffline' });
     expect(attachmentControl(undefined)).toEqual({ visible: false, enabled: false, messageKey: null });
+  });
+
+  it("keeps the session status line out of capability redraws", () => {
+    expect(sessionComposeControls({ imageInput: "unsupported", offline: false, busy: false, text: "hi", draftReady: true })).toMatchObject({ attachVisible: false, attachEnabled: false, hintKey: null });
+    expect(sessionComposeControls({ imageInput: "upgrade_required", offline: false, busy: false, text: "hi", draftReady: true })).toMatchObject({ attachVisible: true, attachEnabled: false, hintKey: "attachUpgradeRequired" });
+    expect(sessionComposeControls({ imageInput: "ready", offline: true, busy: false, text: "hi", draftReady: true })).toMatchObject({ attachVisible: true, attachEnabled: false, hintKey: null, sendDisabled: true });
+    expect(Object.keys(sessionComposeControls({ imageInput: "ready", offline: false, busy: false, text: "hi", draftReady: true }))).not.toContain("composeStatus");
   });
 
   it("maps every server refusal and attachment state to interface copy", () => {
@@ -258,10 +265,16 @@ describe("attachment rendering hooks", () => {
     const session = await asset("session.js");
     expect(session).toContain("setImageInput(value)");
     expect(session).toContain("attachments: draft.ids()");
+    expect(session).toContain("attachHint");
+    const refresh = /function refreshCompose\(\)[\s\S]*?\n  \}/.exec(session)?.[0] ?? "";
+    expect(refresh).not.toContain("composeStatus");
     const ui = await asset("attachment-ui.js");
     expect(ui).toContain("attachment.state === 'expired'");
     expect(ui).toContain("IntersectionObserver");
     expect(ui).toContain("URL.revokeObjectURL");
+    expect(ui).toContain("pagehide");
+    expect(ui).toContain("attachmentCache.get");
+    expect(ui).not.toContain("MutationObserver");
   });
 });
 

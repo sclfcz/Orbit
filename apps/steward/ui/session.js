@@ -15,7 +15,7 @@ import { formatClock } from './format.js';
 import { localeTag, t, tOr } from './i18n.js';
 import { markup } from './markup.js';
 import { branchOf, callSummary, clip, createAssembler, describeRecord, imageSrc, inputRows, placeOf } from './session-model.js';
-import { attachmentControl, attachmentErrorKey } from './attachment-model.js';
+import { attachmentErrorKey, sessionComposeControls } from './attachment-model.js';
 import { createAttachmentDraft } from './attachment-ui.js';
 
 const PAGE_BYTES = 1024 * 1024; // per read; the page appears as the file loads
@@ -86,13 +86,14 @@ export function mountSessionViewer(root, { workerId, agentLabel, isActive, isRea
   const interruptButton = h('button', { type: 'button', class: 'button danger sv-compose-interrupt' }, t('svInterruptButton'));
   const composeStatus = h('span', { class: 'sv-compose-status', role: 'status' });
   const attachButton = h('button', { type: 'button', class: 'attach-button sv-attach', 'aria-label': t('attachImage'), title: t('attachImage') }, icon('image'));
+  const attachHint = h('span', { class: 'attach-hint', role: 'status', hidden: true });
   const attachInput = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif', multiple: true, hidden: true });
   const draft = createAttachmentDraft({
     getCsrf,
     onError: (key) => { composeStatus.textContent = t(key); },
     onChange: () => refreshCompose(),
   });
-  const composeForm = h('form', { class: 'sv-compose' }, attachButton, attachInput, draft.element, composeInput, sendButton, interruptButton);
+  const composeForm = h('form', { class: 'sv-compose' }, attachButton, attachHint, attachInput, draft.element, composeInput, sendButton, interruptButton);
   root.replaceChildren(h('div', { class: 'sv-statusbar' }, statusLine, retryButton), feed, jump, composeForm, composeStatus);
 
   const nearBottom = () => feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
@@ -537,15 +538,22 @@ export function mountSessionViewer(root, { workerId, agentLabel, isActive, isRea
 
   function refreshCompose() {
     const offline = view.status === 'offline';
-    const control = attachmentControl(view.imageInput, offline);
-    attachButton.hidden = !control.visible;
-    attachButton.disabled = !control.enabled;
-    attachButton.title = control.messageKey ? t(control.messageKey) : t('attachImage');
+    const control = sessionComposeControls({
+      imageInput: view.imageInput,
+      offline,
+      busy: composeBusy,
+      text: composeInput.value.trim(),
+      draftReady: !draft.hasItems() || draft.ready(),
+    });
+    attachButton.hidden = !control.attachVisible;
+    attachButton.disabled = !control.attachEnabled;
+    attachButton.title = control.hintKey ? t(control.hintKey) : t('attachImage');
     attachButton.setAttribute('aria-label', attachButton.title);
-    composeInput.disabled = composeBusy || offline;
-    sendButton.disabled = composeBusy || offline || !composeInput.value.trim() || (draft.hasItems() && !draft.ready());
+    attachHint.hidden = !control.hintKey;
+    attachHint.textContent = control.hintKey ? t(control.hintKey) : '';
+    composeInput.disabled = control.inputDisabled;
+    sendButton.disabled = control.sendDisabled;
     interruptButton.disabled = composeBusy || offline || !isActive();
-    if (!composeBusy && control.messageKey) composeStatus.textContent = t(control.messageKey);
   }
 
   function settleWorkerCmd(cmdId, text, success = false) {
