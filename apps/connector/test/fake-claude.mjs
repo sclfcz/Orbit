@@ -5,6 +5,9 @@
 //
 // 1. The stdin prompt is only processed on EOF: nothing happens until stdin ends — a
 //    connector that writes the prompt and forgets stdin.end() hangs forever here too.
+//    With `--input-format stream-json` the stdin text is one JSON user message whose
+//    content is text and image blocks (ADR-0014 phase 7); the log entry carries the raw
+//    message plus the flattened text and image list so tests can assert both.
 // 2. Stream events are LF-delimited JSON: system/init first, assistant messages with
 //    content blocks (tool_use names arrive MCP-namespaced, e.g. mcp__orbit__report),
 //    and a final `result` event that ends the run and the process.
@@ -49,6 +52,7 @@ function argValue(flag) {
   return idx !== -1 && argv[idx + 1] ? argv[idx + 1] : null;
 }
 const sessionId = argValue("--session-id") ?? argValue("--resume") ?? "00000000-0000-4000-8000-000000000001";
+const streamJsonInput = argValue("--input-format") === "stream-json";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -117,7 +121,25 @@ process.stdin.on("data", (chunk) => {
   prompt += chunk;
 });
 process.stdin.on("end", () => {
-  logPrompt({ prompt, argv: process.argv, sessionId, cwd: process.cwd(), pid: process.pid, stdinEnded: true, at: Date.now() });
+  const entry = { prompt, argv: process.argv, sessionId, cwd: process.cwd(), pid: process.pid, stdinEnded: true, at: Date.now() };
+  if (streamJsonInput) {
+    // One LF-terminated user message per send; parse every line so a malformed input fails
+    // loudly here instead of being silently tolerated.
+    const messages = prompt
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line));
+    const blocks = messages.flatMap((m) => (Array.isArray(m.message?.content) ? m.message.content : []));
+    entry.inputFormat = "stream-json";
+    entry.messages = messages;
+    entry.prompt = blocks.filter((b) => b.type === "text").map((b) => b.text).join("");
+    entry.images = blocks
+      .filter((b) => b.type === "image")
+      .map((b) => ({ sourceType: b.source?.type, mimeType: b.source?.media_type, data: b.source?.data }));
+  } else {
+    entry.inputFormat = "text";
+  }
+  logPrompt(entry);
   main().catch((err) => {
     console.error("fake-claude:", err);
     process.exit(3);

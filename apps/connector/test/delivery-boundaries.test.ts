@@ -117,6 +117,19 @@ describe("durable input boundaries", () => {
     expect(["starting", "running", "recovering"]).toContain(observed[0]);
   });
 
+  it("refuses images on start and send for an adapter that declares images:false (PR #59 finding 2)", async () => {
+    const { manager, adapter, dir } = setup(); // the stub is a no-images agent
+    const image = { data: "aGk=", mimeType: "image/png" };
+    await expect(
+      manager.handleCommand("img-start", "start_worker", { workerId: "worker", threadId: "thread", repoId: "repo", mode: "write", prompt: "look", agent: "codex", images: [image] }),
+    ).rejects.toMatchObject({ code: "unsupported_capability" });
+    await expect(
+      manager.handleCommand("img-send", "send", { workerId: "worker", text: "look", intent: "auto", images: [image] }),
+    ).rejects.toMatchObject({ code: "unsupported_capability" });
+    expect(adapter.inputs).toEqual([]);
+    expect(existsSync(join(dir, "worktrees"))).toBe(false); // refused before any worktree
+  });
+
   it("steers now input while after work is queued", async () => {
     const { manager, store, adapter } = setup();
     store.setWorkerState("worker", "running"); adapter.streaming = true;

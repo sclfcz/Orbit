@@ -9,6 +9,11 @@
 // and delivered as the next prompt. The process model also differs from pi: one `claude -p`
 // per run, the process exits when the run ends (there is no idle-hot window), and the next
 // prompt relaunches with `--resume <session uuid>`.
+//
+// Image input (ADR-0014 phase 7): print mode also accepts `--input-format stream-json`,
+// where one JSON user message on stdin carries `text` and `image` content blocks. A run WITH
+// images uses that path; a text-only run keeps the plain-text stdin prompt unchanged, so the
+// proven text path, `--resume`, the report MCP server and the event parsing are untouched.
 import type {
   AgentAdapter,
   AgentCapabilities,
@@ -77,6 +82,47 @@ export function isReportTool(name: string): boolean {
   return name.endsWith("__report");
 }
 
+/** The image types ADR-0014 decision 4 accepts. The Steward validates the upload; the
+ *  adapter re-checks before writing anything, so a forged or stale command cannot push bytes
+ *  of another type through to the CLI. */
+const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+
+const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
+export type ImageInput = { data: string; mimeType: string };
+
+/** Refuses an image the CLI could only choke on (empty/not-base64 data, a type outside
+ *  ADR-0014's four). Runs before spawn and before the session hook: a bad spec leaves no
+ *  process, no session and nothing half-written behind. */
+function assertImages(images: ImageInput[]): void {
+  for (const image of images) {
+    if (typeof image.data !== "string" || image.data.length === 0 || !BASE64_RE.test(image.data)) {
+      throw new AdapterError("bad_request", "image data must be a non-empty base64 string");
+    }
+    if (!ALLOWED_IMAGE_TYPES.has(image.mimeType)) {
+      throw new AdapterError(
+        "bad_request",
+        `unsupported image type '${String(image.mimeType)}'; expected one of ${[...ALLOWED_IMAGE_TYPES].join(", ")}`,
+      );
+    }
+  }
+}
+
+/** One stream-json user message (ADR-0014 phase 7): the text first, then one image block per
+ *  attachment in the order the Steward delivered them. The shape is the Agent SDK's user
+ *  message documented for streaming input, verified against Claude Code 2.0.31. */
+export function streamJsonUserMessage(text: string, images: ImageInput[]): Record<string, unknown> {
+  const content: Record<string, unknown>[] = [];
+  if (text.length > 0) content.push({ type: "text", text });
+  for (const image of images) {
+    content.push({
+      type: "image",
+      source: { type: "base64", media_type: image.mimeType, data: image.data },
+    });
+  }
+  return { type: "user", message: { role: "user", content } };
+}
+
 /** Honest capability set (connector-pi.md §3): what headless Claude Code can and cannot do. */
 const CLAUDE_CAPABILITIES: AgentCapabilities = {
   // No control channel after stdin EOF: a mid-run steer or queued follow-up is impossible.
@@ -88,8 +134,8 @@ const CLAUDE_CAPABILITIES: AgentCapabilities = {
   resume: true,
   // Claude Code keeps transcripts under ~/.claude; no raw-history read is exposed (MVP).
   history: false,
-  // -p reads the prompt from stdin as text; there is no image channel.
-  images: false,
+  // -p with `--input-format stream-json` takes image content blocks (ADR-0014 phase 7).
+  images: true,
   structuredReport: true,
   // The MVP permission bypass (--dangerously-skip-permissions) cannot truly restrict the
   // run to read-only; readonly tasks must not be dispatched to this agent.
@@ -176,7 +222,9 @@ export class ClaudeAdapter implements AgentAdapter {
   }
 
   /** Builds the headless invocation (spike-conclusions §2): permission bypass is the MVP
-   *  yolo product decision; `--session-id` on a first run, `--resume` on a continuation. */
+   *  yolo product decision; `--session-id` on a first run, `--resume` on a continuation.
+   *  `--input-format stream-json` is added only for a run carrying images: the text-only
+   *  path keeps the plain stdin prompt it has always used. */
   buildArgs(spec: StartSpec, mcpConfigPath: string): string[] {
     const args = [
       "-p",
@@ -189,6 +237,7 @@ export class ClaudeAdapter implements AgentAdapter {
       WORKER_SYSTEM_PROMPT,
       "--dangerously-skip-permissions",
     ];
+    if (spec.images && spec.images.length > 0) args.push("--input-format", "stream-json");
     const sessionId = spec.resumeSessionId ?? claudeSessionId(spec.workerId);
     args.push(spec.resumeSessionId ? "--resume" : "--session-id", sessionId);
     if (spec.model) args.push("--model", spec.model);
@@ -217,6 +266,7 @@ export class ClaudeAdapter implements AgentAdapter {
     if (this.runtimes.has(spec.workerId)) {
       throw new AdapterError("lock_held", `a claude process for ${spec.workerId} is already running`);
     }
+    if (spec.images && spec.images.length > 0) assertImages(spec.images);
     const assets = installClaudeAssets(this.options.stateDir);
     const serverPath = assets.serverPath;
     if (this.workerLogsDir) mkdirSync(this.workerLogsDir, { recursive: true });
@@ -255,8 +305,9 @@ export class ClaudeAdapter implements AgentAdapter {
       await spec.onSession?.(null, null, sessionId);
       if (runtime.stopping) throw new AdapterError("aborted", "Claude was stopped before input delivery");
       proc.spawn();
-      // The stdin prompt is only processed on EOF (spike): write it, then END stdin.
-      proc.writePrompt(spec.prompt);
+      // The stdin input is only processed on EOF (spike): write it, then END stdin. With
+      // images it is one stream-json user message; without, the plain-text prompt.
+      proc.writePrompt(spec.prompt, spec.images);
       // §4.4 step 4 analog: system/init must arrive within the window, echo our session id,
       // and show the Orbit MCP server connected (§15 item 1's startup self-check).
       const init = await proc.waitForInit(this.options.initTimeoutMs ?? 30_000);
@@ -577,11 +628,16 @@ export class ClaudeProcess {
     child.on("exit", (code, signal) => this.handleExit(code, signal));
   }
 
-  /** The prompt goes to stdin and stdin is ENDED: the spike hit a permanent hang without it. */
-  writePrompt(prompt: string): void {
+  /** The input goes to stdin and stdin is ENDED: the spike hit a permanent hang without it.
+   *  With images the input is one LF-terminated stream-json user message (the CLI was
+   *  started with `--input-format stream-json`); without, the prompt is written as plain
+   *  text exactly as before. */
+  writePrompt(prompt: string, images?: ImageInput[]): void {
     const stdin = this.child?.stdin;
     if (!this.child || this.exited || !stdin) throw new Error("claude process is not running");
-    stdin.write(prompt, () => {
+    const input =
+      images && images.length > 0 ? `${JSON.stringify(streamJsonUserMessage(prompt, images))}\n` : prompt;
+    stdin.write(input, () => {
       // stdin may already be destroyed (a fast crash); the exit event still arrives.
     });
     stdin.end();
