@@ -24,6 +24,9 @@ const WorkerCmdArgsSchema = z.object({
   /** `kind: "send"` */
   text: z.string().optional(),
   intent: z.enum(["now", "after", "auto"]).optional(),
+  /** ADR-0014: ids returned by POST /app/api/attachments. The Steward validates ownership
+   *  and the worker's Pi + imageInput capability before anything reaches the outbox. */
+  attachments: z.array(z.string().min(1).max(64)).min(1).max(4).optional(),
   /** `kind: "interrupt"`: "停，然后……" */
   then: z.string().optional(),
 });

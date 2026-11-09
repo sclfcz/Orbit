@@ -59,6 +59,7 @@ import {
   type ErrorMessage,
   type EventsAckMessage,
   type HistoryReqMessage,
+  type ImageAttachmentRef,
   type MachineOfflineMessage,
   type PongMessage,
   type ResyncMessage,
@@ -91,7 +92,12 @@ import {
   type FauxRequestRecord,
   type StewardModels,
 } from "./llm/models.ts";
-import { createLedger, QUIET_MERGE_MS, type Ledger, type LedgerSql, type NotifyRow, type OutboundDeliveryRow, type QuestionRow, type RunRow, type WakeRow } from "./ledger.ts";
+import { createLedger, QUIET_MERGE_MS, type Ledger, type LedgerSql, type NotifyRow, type OutboundDeliveryRow, type QuestionRow, type RunRow, type WakeRow, type WorkerRow } from "./ledger.ts";
+import {
+  ATTACHMENT_SOFT_BUDGET_BYTES,
+  AttachmentStore,
+  type AttachmentLink,
+} from "./attachments.ts";
 import { DeploymentAuth, deploymentSecrets, ownerAuthorized } from "./deployment-auth.ts";
 import { loginPage } from "./login-page.ts";
 import { renderChangeReports } from "./notes.ts";
@@ -133,6 +139,7 @@ import type {
   MachineDirectoryRemovalResult,
   MachineDirectoryResult,
 } from "./workspace-api.ts";
+import { attachmentResponse } from "./workspace-api.ts";
 import { WorkspaceStream } from "./workspace-stream.ts";
 import { WebApp, linkTargetForThread, loginLinkPolicyFromEnv, parseSessionCookie, verifyLinkToken } from "./web.ts";
 
@@ -754,6 +761,23 @@ export class Steward extends Agent<Env> {
     }
   }
 
+  // Image attachments (ADR-0014 phase 2): one store over the DO's SQLite. The soft budget is
+  // a field, not a constant read at each call, so tests can inject a small value.
+  private attachments_?: AttachmentStore;
+  private attachmentBudgetBytes = ATTACHMENT_SOFT_BUDGET_BYTES;
+  private get attachments(): AttachmentStore {
+    return (this.attachments_ ??= new AttachmentStore({
+      sql: this.sql.bind(this) as unknown as import("./attachments.ts").AttachmentSql,
+      transaction: (fn) => this.ctx.storage.transactionSync(fn),
+      softBudgetBytes: this.attachmentBudgetBytes,
+    }));
+  }
+
+  setAttachmentBudgetForTests(bytes: number): void {
+    this.attachmentBudgetBytes = bytes;
+    this.attachments.setSoftBudgetForTests(bytes);
+  }
+
   // The browser web app (issue #22, ADR-0010): password/passkey and legacy-link sessions,
   // Thread timeline, machine management. Same lazy-bind pattern as the ledger.
   private web_?: WebApp;
@@ -797,6 +821,8 @@ export class Steward extends Agent<Env> {
         addDirectory: (input) => this.addMachineDirectory(input),
         removeDirectory: (input) => this.removeMachineDirectory(input),
         browseDirectory: (input, signal) => this.browseMachineDirectory(input, signal),
+        uploadAttachment: (input) => this.attachments.create(input),
+        readAttachment: (id) => this.attachments.readChunks(id),
         webauthnRegisterOptions: (sid: string, rpId: string) => this.web.webauthnRegisterOptions(sid, rpId),
         webauthnRegisterVerify: (sid: string, rpId: string, origin: string, label: string, attestation: unknown) =>
           this.web.webauthnRegisterVerify(sid, rpId, origin, label, attestation),
@@ -1118,7 +1144,13 @@ export class Steward extends Agent<Env> {
    * Throwing (caught by the callers) means: this WAS a worker-question answer, but it could
    * not be delivered — the user is told, the question stays open.
    */
-  private async answerWorkerQuestion(input: { question: QuestionRow; answer: string; ref: string }): Promise<{
+  private async answerWorkerQuestion(input: {
+    question: QuestionRow;
+    answer: string;
+    ref: string;
+    attachments?: ImageAttachmentRef[];
+    sourceMsgId?: string;
+  }): Promise<{
     workerId: string;
     delivery: string;
   } | null> {
@@ -1137,6 +1169,7 @@ export class Steward extends Agent<Env> {
         workerId: worker.workerId,
         text: `（用户对你问题的回答）${answer}`,
         intent: "now",
+        ...(input.attachments?.length ? { attachments: input.attachments, sourceMsgId: input.sourceMsgId } : {}),
         provenance: input.ref,
         cmdId: `answer:${question.qid}:${ulid()}`,
       });
@@ -1182,6 +1215,11 @@ export class Steward extends Agent<Env> {
     // Every request the DO serves reveals the deployment's public origin — the source for the
     // pairing command's URL and the absolute one-time card links (web.ts owns the value).
     if (url.protocol === "https:" || url.protocol === "http:") this.web.recordOrigin(url.origin);
+    const deviceAttachment = /^\/connector\/attachments\/([\w-]{1,64})$/.exec(url.pathname);
+    if (deviceAttachment) {
+      if (request.method !== "GET") return new Response("not found", { status: 404 });
+      return this.handleDeviceAttachment(request, deviceAttachment[1]!);
+    }
     if (url.pathname.startsWith("/api/")) {
       if (!ownerAuthorized(request, this.env)) return new Response("unauthorized", { status: 401 });
       if (url.pathname === "/api/messages" && (request.method === "POST" || request.method === "GET")) {
@@ -1232,6 +1270,26 @@ export class Steward extends Agent<Env> {
       return this.web.handle(request);
     }
     return new Response("not found", { status: 404 });
+  }
+
+  /** Connector-side read (ADR-0014): same per-device bearer token as the WebSocket, plus a
+   *  target-device link check. A missing/unlinked attachment is one 404 shape, never a
+   *  profile of what exists on another machine. */
+  private async handleDeviceAttachment(request: Request, id: string): Promise<Response> {
+    const parsed = await parseToken(await this.serverKeys(), bearer(request));
+    if (!parsed) return new Response("unauthorized", { status: 401 });
+    const device = this.sql<{ epoch: number; revoked: number }>`
+      SELECT epoch, revoked FROM device WHERE deviceId = ${parsed.deviceId}
+    `[0];
+    if (!device || device.revoked || device.epoch !== parsed.epoch) {
+      return new Response("unauthorized", { status: 401 });
+    }
+    const download = this.attachments.readChunks(id);
+    if (!download || !this.attachments.authorizedForDevice(id, parsed.deviceId)) {
+      return new Response("not found", { status: 404 });
+    }
+    this.logChannel("attachment_device_read", `${id} ${download.bytes} ${download.mimeType}`);
+    return attachmentResponse(id, download);
   }
 
   private async handlePasswordLogin(request: Request, url: URL): Promise<Response> {
@@ -1654,6 +1712,24 @@ export class Steward extends Agent<Env> {
       this.sendError(connection, "forbidden", `subscribe to ${cmd.workerId} before sending worker_cmd`, cmd.id);
       return;
     }
+    let attachmentRefs: ImageAttachmentRef[] | undefined;
+    if (cmd.kind === "send" && cmd.args?.attachments?.length) {
+      const worker = this.ledger.workers.get(cmd.workerId);
+      if (!worker) {
+        this.sendError(connection, "not_found", `worker ${cmd.workerId} does not exist`, cmd.id);
+        return;
+      }
+      try {
+        this.assertImageWorker(worker);
+        attachmentRefs = this.attachments.refs(cmd.args.attachments);
+      } catch (error) {
+        if (error instanceof WorkspaceError) {
+          this.sendError(connection, error.code as ErrorMessage["code"], `attachments refused: ${error.code}`, cmd.id);
+          return;
+        }
+        throw error;
+      }
+    }
     this.sql`INSERT OR REPLACE INTO web_cmd_relay (cmdId, webConnId, createdAt) VALUES (${cmd.id}, ${connection.id}, ${Date.now()})`;
     const outcome =
       cmd.kind === "send"
@@ -1661,6 +1737,7 @@ export class Steward extends Agent<Env> {
             workerId: cmd.workerId,
             text: cmd.args?.text ?? "",
             intent: cmd.args?.intent ?? "auto",
+            ...(attachmentRefs ? { attachments: attachmentRefs } : {}),
             provenance: "web_direct",
             cmdId: cmd.id,
           })
@@ -2634,7 +2711,14 @@ export class Steward extends Agent<Env> {
     deviceId: string,
     kind: string,
     args: unknown,
-    opts: { workerId?: string; notAfter?: number | null; ackTimeoutMs?: number; cmdId?: string; held?: boolean } = {},
+    opts: {
+      workerId?: string;
+      notAfter?: number | null;
+      ackTimeoutMs?: number;
+      cmdId?: string;
+      held?: boolean;
+      links?: AttachmentLink[];
+    } = {},
   ): Promise<{ cmdId: string; cseq: number; state: string }> {
     const cseq = (this.sql<{ m: number | null }>`SELECT MAX(cseq) AS m FROM outbox WHERE deviceId = ${deviceId}`[0]?.m ?? 0) + 1;
     // `cmdId` is the idempotency key for steward tool replays (protocol §7.1): the start_worker
@@ -2646,10 +2730,13 @@ export class Steward extends Agent<Env> {
       : undefined;
     if (existing) return { cmdId: existing.cmdId, cseq: existing.cseq, state: existing.state };
     const notAfter = opts.notAfter === undefined ? Date.now() + DEFAULT_NOTAFTER_MS : opts.notAfter;
-    this.sql`
-      INSERT INTO outbox (cmdId, deviceId, workerId, cseq, kind, payload, notAfter, held, state, createdAt)
-      VALUES (${cmdId}, ${deviceId}, ${opts.workerId ?? null}, ${cseq}, ${kind}, ${JSON.stringify(args ?? {})}, ${notAfter}, ${opts.held ? 1 : 0}, 'queued', ${Date.now()})
-    `;
+    this.ctx.storage.transactionSync(() => {
+      this.sql`
+        INSERT INTO outbox (cmdId, deviceId, workerId, cseq, kind, payload, notAfter, held, state, createdAt)
+        VALUES (${cmdId}, ${deviceId}, ${opts.workerId ?? null}, ${cseq}, ${kind}, ${JSON.stringify(args ?? {})}, ${notAfter}, ${opts.held ? 1 : 0}, 'queued', ${Date.now()})
+      `;
+      if (opts.links?.length) this.attachments.link(opts.links);
+    });
     // A dispatch registers the worker before enqueueing: the moment the row exists, the
     // maintenance alarm (stall notice + reap) must be armed (issue #13).
     this.armWorkerSweeps();
@@ -3210,7 +3297,7 @@ export class Steward extends Agent<Env> {
    *  outbound row id / merged group id), which routes deterministically before the model ever
    *  sees the text (§3.1 signal 1). Idempotent on the client-chosen `id`. */
   private async handleApiMessage(request: Request): Promise<Response> {
-    let body: { text?: unknown; id?: unknown; replyTo?: unknown };
+    let body: { text?: unknown; id?: unknown; replyTo?: unknown; attachments?: unknown };
     try {
       body = (await request.json()) as typeof body;
     } catch {
@@ -3218,6 +3305,9 @@ export class Steward extends Agent<Env> {
     }
     if (typeof body.text !== "string" || body.text.trim().length === 0) {
       return Response.json({ error: "bad_request" }, { status: 400 });
+    }
+    if (body.attachments !== undefined) {
+      return Response.json({ error: "attachments_not_allowed" }, { status: 400 });
     }
     const id = typeof body.id === "string" && body.id.length > 0 ? body.id : ulid();
     const replyTo = typeof body.replyTo === "string" && body.replyTo.length > 0 ? body.replyTo : undefined;
@@ -3283,7 +3373,7 @@ export class Steward extends Agent<Env> {
   /** POST /api/actions — a button callback on one of our messages (ask options, PR consent,
    *  note decisions, offline asks). Idempotent on (message, action). */
   private async handleApiActions(request: Request): Promise<Response> {
-    let body: { cardMsgId?: unknown; action?: unknown };
+    let body: { cardMsgId?: unknown; action?: unknown; attachments?: unknown };
     try {
       body = (await request.json()) as typeof body;
     } catch {
@@ -3291,6 +3381,9 @@ export class Steward extends Agent<Env> {
     }
     if (typeof body.cardMsgId !== "string" || typeof body.action !== "string" || body.action.length === 0) {
       return Response.json({ error: "bad_request" }, { status: 400 });
+    }
+    if (body.attachments !== undefined) {
+      return Response.json({ error: "attachments_not_allowed" }, { status: 400 });
     }
     // No request-level dedup on purpose: the handlers are idempotent (an answered question
     // gets its polite "already answered" reply; a consent re-tap retries), and Feishu-style
@@ -3325,10 +3418,44 @@ export class Steward extends Agent<Env> {
   /** A user message becomes one steward input, idempotent on the msgId (steward.md §9.1/§11).
    * `prefilledNote`/`routedThreadId` serve the ask-card clicks (#7): the click's choice is
    * submitted as a system-noted user action already routed to the picked Thread. */
+  /** ADR-0014: the only main-composer attachment route is a reply that will take the
+   *  deterministic open-question relay. Mirrors submitUserMessage's routing rule exactly. */
+  private attachmentWorkerForMessage(input: { parentId?: string; routedThreadId?: string | null }): WorkerRow | null {
+    if (!input.parentId) return null;
+    const quotedThreadIds = this.ledger.outbound.threadIdsForProviderMsg(input.parentId);
+    const routed = input.routedThreadId ?? (quotedThreadIds.length === 1 ? quotedThreadIds[0]! : null);
+    if (!routed || !this.ledger.threads.get(routed)) return null;
+    const routedRow = this.ledger.outbound.rowForProviderMsg(input.parentId);
+    const question = routedRow?.questionId !== null && routedRow?.questionId !== undefined
+      ? this.ledger.questions.get(routedRow.questionId)
+      : null;
+    if (question?.status !== "open" || question.workerId === null || question.kind !== "report") return null;
+    return this.ledger.workers.get(question.workerId);
+  }
+
+  /** The worker must be Pi and its current hello must advertise reference image input. */
+  private assertImageWorker(worker: WorkerRow): void {
+    if (worker.agent !== "pi") throw new WorkspaceError("unsupported_capability", 400);
+    const agent = this.ledger.machines.get(worker.deviceId)?.agentCaps?.find((entry) => entry.kind === "pi");
+    if (agent?.imageInput !== "reference") throw new WorkspaceError("upgrade_required", 400);
+  }
+
   private async submitUserMessage(
-    input: { msgId: string; text: string; parentId?: string; prefilledNote?: string; routedThreadId?: string | null },
+    input: {
+      msgId: string;
+      text: string;
+      parentId?: string;
+      prefilledNote?: string;
+      routedThreadId?: string | null;
+      attachments?: ImageAttachmentRef[];
+    },
   ): Promise<void> {
     const operationId = `user:${input.msgId}`;
+    if (input.attachments?.length) {
+      const worker = this.attachmentWorkerForMessage({ parentId: input.parentId, routedThreadId: input.routedThreadId });
+      if (!worker) throw new WorkspaceError("attachments_not_allowed", 400);
+      this.assertImageWorker(worker);
+    }
     // Signal 1 (§3.1): a quote of one of our messages routes to that Thread directly.
     // A MERGED card (issue #11) spans several Threads — no single owner — so the reply
     // routes to the conversation (the steward decides which matter it belongs to) while
@@ -3360,10 +3487,21 @@ export class Steward extends Agent<Env> {
         const ref = this.ownerMessageRef(input.msgId);
         if (ref !== null) {
           try {
-            await this.answerWorkerQuestion({ question: quotedQuestion, answer: input.text, ref });
-            return; // delivered to the worker; no LLM run for this message
+            const answered = await this.answerWorkerQuestion({
+              question: quotedQuestion,
+              answer: input.text,
+              ref,
+              ...(input.attachments?.length ? { attachments: input.attachments, sourceMsgId: input.msgId } : {}),
+            });
+            if (answered) return; // delivered to the worker; no LLM run for this message
           } catch {
             return; // the failure was already told to the user; the question stays open
+          }
+          // The pre-check proved the open-question route, but a concurrent close can still
+          // race it. Never drop the images into Sig's text-only path; tell the caller.
+          if (input.attachments?.length) {
+            this.logChannel("attachment_route_lost", input.msgId);
+            return;
           }
         }
         // Not a (recorded) owner message — e.g. a card click replayed as text: fall through
@@ -3423,6 +3561,13 @@ export class Steward extends Agent<Env> {
     const quoted = input.replyTo ? this.ledger.outbound.row(input.replyTo) : null;
     if (input.replyTo && !quoted) throw new WorkspaceError("reply_target_not_found", 404);
     const parentId = typeof quoted?.providerMsgId === "string" ? quoted.providerMsgId : undefined;
+    let attachmentRefs: ImageAttachmentRef[] | undefined;
+    if (input.attachments?.length) {
+      attachmentRefs = this.attachments.refs(input.attachments);
+      const worker = this.attachmentWorkerForMessage({ parentId, routedThreadId: thread?.threadId ?? null });
+      if (!worker) throw new WorkspaceError("attachments_not_allowed", 400);
+      this.assertImageWorker(worker);
+    }
     if (!previous && this.ledger.runs.openRows().filter((r) => r.kind === "user").length >= MAX_OPEN_USER_RUNS) {
       throw new WorkspaceError("queue_full", 429);
     }
@@ -3433,6 +3578,7 @@ export class Steward extends Agent<Env> {
     const work = this.submitUserMessage({
       msgId, text: input.text, ...(parentId ? { parentId } : {}),
       routedThreadId: thread?.threadId ?? null,
+      ...(attachmentRefs ? { attachments: attachmentRefs } : {}),
       ...(thread ? { prefilledNote: `（系统注：用户指定这条消息归属 Thread「${escapeMarkers(thread.title)}」（${thread.threadId}）。）\n` } : {}),
     }).then(() => { this.ledger.webRequests.complete(input.id); }).finally(() => { this.webInputs.delete(input.id); });
     this.webInputs.set(input.id, work);

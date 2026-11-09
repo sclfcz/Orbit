@@ -272,6 +272,8 @@ export interface WebDeps {
     | "addDirectory"
     | "removeDirectory"
     | "browseDirectory"
+    | "uploadAttachment"
+    | "readAttachment"
     | "webauthnRegisterOptions"
     | "webauthnRegisterVerify"
     | "webauthnRemove"

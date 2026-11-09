@@ -156,6 +156,8 @@ export interface MachineRow {
   online: boolean;
   lastSeen: number | null;
   agents: string[];
+  /** The full hello.agents snapshot (ADR-0014): capabilities + optional imageInput. */
+  agentCaps?: Array<{ kind: string; version: string; capabilities: Record<string, boolean>; imageInput?: "reference" }>;
   maxWorkers: number;
   /** The connector process generation (protocol §6.1): changes on every connector restart. */
   bootId: string | null;
@@ -473,6 +475,7 @@ const viewMachine = (r: Record<string, unknown>): MachineRow => ({
   online: !!r.online,
   lastSeen: (r.lastSeen as number | null) ?? null,
   agents: jsonOrNull<string[]>(r.agents as string | null) ?? [],
+  agentCaps: jsonOrNull<MachineRow["agentCaps"]>(r.agentCaps as string | null) ?? [],
   maxWorkers: (r.maxWorkers as number | null) ?? 1,
   bootId: (r.bootId as string | null) ?? null,
   reliability: jsonOrNull<MachineReliability>(r.reliability as string | null),
@@ -655,11 +658,12 @@ export function createLedger(deps: LedgerDeps) {
       const ts = now();
       machineStatus.setOnline(hello.deviceId, true, hello.machine.name);
       sql`
-        INSERT INTO sh_machine (deviceId, name, online, lastSeen, agents, maxWorkers, bootId)
-        VALUES (${hello.deviceId}, ${hello.machine.name}, 1, ${ts}, ${JSON.stringify(hello.agents.map((a) => a.kind))}, ${hello.limits.maxWorkers}, ${hello.bootId})
+        INSERT INTO sh_machine (deviceId, name, online, lastSeen, agents, agentCaps, maxWorkers, bootId)
+        VALUES (${hello.deviceId}, ${hello.machine.name}, 1, ${ts}, ${JSON.stringify(hello.agents.map((a) => a.kind))}, ${JSON.stringify(hello.agents)}, ${hello.limits.maxWorkers}, ${hello.bootId})
         ON CONFLICT (deviceId) DO UPDATE SET
           name = excluded.name, online = 1, lastSeen = excluded.lastSeen,
-          agents = excluded.agents, maxWorkers = excluded.maxWorkers, bootId = excluded.bootId
+          agents = excluded.agents, agentCaps = excluded.agentCaps,
+          maxWorkers = excluded.maxWorkers, bootId = excluded.bootId
       `;
       // Slots occupied by sessions outside this ledger also count; tracked sessions are
       // counted live so a subsequent dispatch/settle immediately changes the free slots.

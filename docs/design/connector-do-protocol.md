@@ -213,7 +213,7 @@ A connector connection sending browser-type messages, or a browser connection se
   "deviceId": "dev_…", "bootId": "…", "connEpoch": 42,
   "connector": { "version": "0.1.0", "os": "darwin", "arch": "arm64", "node": "22.13.0" },
   "machine": { "name": "mac-studio", "memTotalMB": 65536, "memFreeMB": 31000 },
-  "agents": [ { "kind": "pi", "version": "1.2.0", "capabilities": { "steer": true, "followUp": true, "interrupt": true, "resume": true, "history": true, "images": true, "structuredReport": true, "readonly": true } } ],
+  "agents": [ { "kind": "pi", "version": "1.2.0", "capabilities": { "steer": true, "followUp": true, "interrupt": true, "resume": true, "history": true, "images": true, "structuredReport": true, "readonly": true }, "imageInput": "reference" } ],
   "repos": [ { "repoId": "…", "name": "sig", "path": "/Users/x/code/sig", "defaultBranch": "main", "remote": "git@github.com:…", "capability": { "kind": "git", "gitRoot": "/Users/x/code/sig", "defaultBranch": "main", "remote": "git@github.com:…" } } ],
   "limits": { "maxWorkers": 4, "running": 1 },
   "workers": [ { "workerId": "w…", "agent": "pi", "state": "idle", "lastSeq": 128, "sessionId": "…", "lastOutcome": "reported:done" } ],
@@ -224,6 +224,7 @@ A connector connection sending browser-type messages, or a browser connection se
 - `bootId`: randomly generated at each start of the connector process. The DO uses it to tell "reconnect after a network blip" (same `bootId`) from "connector restart" (new `bootId`; all pi processes exited in between).
 - `workers` is a full snapshot from the connector's point of view, used for reconciliation.
 - `repos[].capability` (issue #88): `{kind:"git", gitRoot, defaultBranch, remote}` or `{kind:"plain"}`. Optional on the wire — absent on a connector build that predates it, in which case the repo is a Git repository (no earlier connector could register anything else) and `defaultBranch`/`remote` carry the same facts the deprecated flat fields always have.
+- `agents[].imageInput` (ADR-0014): optional; `"reference"` means this agent can take attachment references and pull their bytes. Absent on an older connector, and the Steward then refuses an image-bearing command with an `orbit upgrade` instruction instead of sending it.
 
 **`welcome`** (DO → connector)
 
@@ -256,7 +257,7 @@ Common envelope:
 |---|---|---|
 | `register_repo` | `path` | Authenticated owner web action. Registers any existing directory and returns its canonical identity plus detected Git capability. No project approval or write-policy changes. |
 | `start_worker` | `threadId, repoId, mode, base?, prompt, images?, model?` | Maps to connector-pi.md §6.1; `repoId` must be in the connector's whitelist |
-| `send` | `text, images?, intent` | `intent: now \| after \| auto` |
+| `send` | `text, attachments?, images?, intent` | `intent: now \| after \| auto`; `attachments` are reference-only (ADR-0014) |
 | `interrupt` | `then?: { text }` | Abort, optionally followed by one new instruction |
 | `resume` | `reason` | |
 | `stop_process` | none | |
@@ -265,7 +266,9 @@ Common envelope:
 | `pr_worker` | `workerId, title?, body?` | The PR consent gate (issue #21): push the branch + `gh pr create` in the worktree; result arrives as `pr_created`/`pr_failed` events |
 | `diag` | none | Ask for diagnostic information |
 
-Images ride base64-encoded in `images` and must fit, together with the whole command, within 256 KiB (about 190 KB of image bytes). Anything larger is compressed on the steward side before dispatch (downscaled or converted to JPEG); if it still does not fit, the command is rejected and the user is told. Ways to pass larger images: open question 3 in §8; not implemented in the MVP.
+Legacy images ride base64-encoded in `images` and must fit, together with the whole command, within 256 KiB (about 190 KB of image bytes). Anything larger is compressed on the steward side before dispatch (downscaled or converted to JPEG); if it still does not fit, the command is rejected and the user is told.
+
+ADR-0014 phase 2 adds the reference path used by the web workspace: `attachments` is an array of at most 4 `{id, mimeType, bytes, sha256}` objects, never base64. The browser uploads raw bytes through the session-authenticated `POST /app/api/attachments` with an `X-Orbit-Upload-Id` request id (same id + same bytes is one attachment; a different body is a conflict); the API accepts only `image/png`, `image/jpeg`, `image/webp` and `image/gif`, verifies the magic bytes, and stores at most 3 MiB per image / 6 MiB per message in 256 KiB chunks. The connector reads `GET /connector/attachments/:id` with its normal device bearer token and may read only an attachment linked to a command whose `targetDeviceId` is that device; anything else is a 404. Commands stay small, so the 256 KiB rule is unchanged.
 
 ### 6.3 Command ack and result (connector → DO)
 
@@ -421,7 +424,7 @@ The `interrupt` command travels through `outbox` like any other command, with no
 
 1. ~~**Mechanism for waking the steward.**~~ **Resolved (verified in the spike).** After events are committed to storage, call `harness.submit(text, { operationId: "evt:<workerId>:<seq>", whenBusy: "followUp" })` for each event that needs the steward. The `operationId` makes replay and retransmission idempotent (send the same event batch 3 times and the steward still gets only 1 input); `PiHarness` maintains an alarm heartbeat job per session, so after the DO is force-reset no request is needed — the alarm restarts itself and carries on. The same applies to `cmd_result`. The only remaining question is "which events are worth waking for" (item 2). Note: `submit` must be called after the events are committed and acked; if a crash happens in between, `processed_upto` triggers reprocessing, and `operationId` guarantees no duplication.
 2. **Throttling event processing.** Waking the steward for every `events` batch keeps the DO constantly awake. Leaning toward: `progress` is only committed, no wake; only `report/settled/lost/error/external_activity` wake processing.
-3. **Passing large images**: connector-pi.md allows a single image up to 4 MB base64, beyond this protocol's 256 KiB per-message cap. Options: compress on the steward side to fit within the cap (the MVP approach); stage in R2 first with the command carrying only a reference, the connector downloading over a signed URL (inside Cloudflare, can ship with the one-click deploy); or the connector uploading separately over HTTP in chunks. Leaning toward R2 staging later.
+3. ~~**Passing large images**~~ **Resolved for phase 2 (ADR-0014):** the command carries reference objects and the connector pulls chunks through the device-authenticated attachment endpoint; R2 staging remains a possible later replacement if volume or retention outgrows Durable Object SQLite.
 4. **Interest-driven progress levels.** Silent by default (`coarse`); when the user opens a worker in the web UI, raise the frequency via `set_progress{workerId, level:"live"}` and restore it when they leave. This reduces wake-ups while nobody is watching. This command needs to be added to the command set.
 5. **Device key pairs** (Ed25519 signing challenge): when to replace bearer tokens; `hello.auth` already reserves the room.
 6. ~~**The `web` role's session.**~~ **Resolved:** password/passkey login creates the same database-backed session as the legacy one-time link path; see [ADR-0010](../adr/0010-browser-password-authentication.md).

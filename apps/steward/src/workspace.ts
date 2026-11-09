@@ -18,6 +18,8 @@ export interface WorkspaceInput {
   threadId?: string;
   /** The id of the card or message being answered (an outbound row id). */
   replyTo?: string;
+  /** ADR-0014: uploaded attachment ids. Only valid on the two worker-bound routes. */
+  attachments?: string[];
 }
 
 /** A button the owner pressed on a card. `cardId` is the outbound row id of that card. */

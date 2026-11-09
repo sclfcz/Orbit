@@ -3,9 +3,12 @@ import {
   CmdAckMessageSchema,
   CmdMessageSchema,
   CmdResultMessageSchema,
+  ImageAttachmentRefSchema,
+  ImageAttachmentRefsSchema,
   UnregisterRepoArgsSchema,
   UnregisterRepoResultSchema,
 } from "../src/commands.ts";
+import { WorkerCmdMessageSchema } from "../src/direct-worker-cmd.ts";
 
 describe("unregister_repo schemas", () => {
   it("accepts a canonical non-empty repo id and rejects malformed arguments", () => {
@@ -58,5 +61,35 @@ describe("CmdResultMessageSchema", () => {
   it("accepts a failed result with an error payload", () => {
     const msg = { t: "cmd_result", re: "cmd_1", ok: false, error: { code: "lock_held", message: "busy", retriable: false } };
     expect(CmdResultMessageSchema.safeParse(msg).success).toBe(true);
+  });
+});
+
+describe("ADR-0014 attachment schemas", () => {
+  const ref = {
+    id: "01J0000000000000000000000",
+    mimeType: "image/png",
+    bytes: 1024,
+    sha256: "a".repeat(64),
+  };
+
+  it("accepts a reference and rejects base64/data fields", () => {
+    expect(ImageAttachmentRefSchema.safeParse(ref).success).toBe(true);
+    expect(ImageAttachmentRefSchema.safeParse({ ...ref, data: "iVBORw0KGgo=" }).success).toBe(false);
+    expect(ImageAttachmentRefSchema.safeParse({ ...ref, mimeType: "image/svg+xml" }).success).toBe(false);
+    expect(ImageAttachmentRefSchema.safeParse({ ...ref, sha256: "nope" }).success).toBe(false);
+  });
+
+  it("caps a message at four references", () => {
+    expect(ImageAttachmentRefsSchema.safeParse([ref]).success).toBe(true);
+    expect(ImageAttachmentRefsSchema.safeParse([ref, ref, ref, ref]).success).toBe(true);
+    expect(ImageAttachmentRefsSchema.safeParse([ref, ref, ref, ref, ref]).success).toBe(false);
+    expect(ImageAttachmentRefsSchema.safeParse([]).success).toBe(false);
+  });
+
+  it("lets a worker_cmd carry at most four attachment ids", () => {
+    const base = { t: "worker_cmd", id: "wc-1", workerId: "w1", kind: "send" };
+    expect(WorkerCmdMessageSchema.safeParse({ ...base, args: { text: "x", attachments: ["a"] } }).success).toBe(true);
+    expect(WorkerCmdMessageSchema.safeParse({ ...base, args: { text: "x", attachments: ["a", "b", "c", "d"] } }).success).toBe(true);
+    expect(WorkerCmdMessageSchema.safeParse({ ...base, args: { text: "x", attachments: ["a", "b", "c", "d", "e"] } }).success).toBe(false);
   });
 });

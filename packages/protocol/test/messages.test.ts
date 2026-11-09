@@ -44,6 +44,28 @@ describe("HelloMessageSchema", () => {
     });
     expect(parsed.success).toBe(true);
   });
+
+  it("accepts an agent's optional imageInput capability and keeps old hello payloads valid", () => {
+    const oldAgent = { kind: "pi", version: "1.2.0", capabilities: { images: true } };
+    expect(HelloMessageSchema.safeParse({ ...validHello, agents: [oldAgent] }).success).toBe(true);
+    expect(HelloMessageSchema.safeParse({
+      ...validHello,
+      agents: [{ ...oldAgent, imageInput: "reference" }],
+    }).success).toBe(true);
+    expect(HelloMessageSchema.safeParse({
+      ...validHello,
+      agents: [{ ...oldAgent, imageInput: "inline" }],
+    }).success).toBe(false);
+  });
+});
+
+describe("ErrorMessageSchema attachment refusals (ADR-0014)", () => {
+  it.each(["duplicate_attachment", "too_many_attachments", "attachment_not_found", "attachments_not_allowed", "unsupported_capability", "upgrade_required"])(
+    "accepts %s",
+    (code) => {
+      expect(ErrorMessageSchema.safeParse({ t: "error", re: "wc-1", code, message: "x", retriable: false }).success).toBe(true);
+    },
+  );
 });
 
 describe("WelcomeMessageSchema", () => {
