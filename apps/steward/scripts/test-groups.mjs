@@ -54,7 +54,7 @@ const COST = {
   "web-auth.test.ts": 4,
   "web-pages.test.ts": 4,
   "ui-session.test.ts": 4,
-  "ui-modules.test.ts": 4,
+  "ui-modules.test.ts": 6,
   "workspace-stream.test.ts": 12,
   "verify-sweep-grid.test.ts": 7,
 };

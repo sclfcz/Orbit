@@ -33,6 +33,7 @@ interface Item {
   id: string;
   kind: string;
   threadId: string | null;
+  imageReply?: string;
   buttons: Array<{ label: string; action?: string }>;
 }
 
@@ -160,6 +161,7 @@ describe("a routine suggestion", () => {
     await waitRunsSettled();
     const offer = (await get()).attention.find((entry) => entry.kind === "offer");
     expect(offer).toBeDefined();
+    expect(offer!.imageReply).toBeUndefined(); // only an open report question offers the image reply path
     expect((await ownerStub().outboundRows(100)).find((row) => row.id === offer!.id)).toMatchObject({ channel: "local" });
 
     expect((await post("actions", { id: "accept-0001", cardId: offer!.id, action: "routine_accept" })).status).toBe(202);

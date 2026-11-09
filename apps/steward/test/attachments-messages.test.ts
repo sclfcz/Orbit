@@ -56,6 +56,32 @@ async function postMessage(cookie: string, csrf: string, body: unknown): Promise
   });
 }
 
+async function workspace(cookie: string): Promise<{
+  messages: Array<{ id: string; attachments?: Array<{ id: string; state: string }> }>;
+  threads: Array<{
+    timeline: Array<{ id: number; attachments?: Array<{ id: string; state: string }> }>;
+    workers: Array<{ id: string; imageInput: string }>;
+  }>;
+  attention: Array<{ id: string; kind: string; imageReply?: string }>;
+}> {
+  const res = await SELF.fetch(`${BASE}/app/api/workspace`, { headers: { cookie } });
+  expect(res.status).toBe(200);
+  return await res.json() as never;
+}
+
+async function waitWorkspaceAttachment(cookie: string, msgId: string, state: string, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const snap = await workspace(cookie);
+    const message = snap.messages.find((entry) => entry.id === `user:web:${msgId}`);
+    const id = message?.attachments?.[0]?.id;
+    const timeline = snap.threads.flatMap((thread) => thread.timeline).find((entry) => id && entry.attachments?.some((attachment) => attachment.id === id));
+    if (message?.attachments?.[0]?.state === state && timeline?.attachments?.[0]?.state === state) return snap;
+    if (Date.now() > deadline) throw new Error(`attachment state ${state} never reached: ${JSON.stringify({ message, timeline })}`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
 async function counts(): Promise<{ attachments: number; links: number; inbound: number; outbox: number }> {
   return runInDurableObject(ownerStub(), (instance: Steward) => {
     const sql = (instance as unknown as { sql: (strings: TemplateStringsArray) => Array<{ n: number }> }).sql.bind(instance);
@@ -230,6 +256,21 @@ describe("session-view send with attachments", { timeout: 30_000 }, () => {
 });
 
 describe("main composer attachments", { timeout: 30_000 }, () => {
+  it("exposes the same three imageInput states the server uses", async () => {
+    const ready = await runningWorker({ name: "mac-ready", imageInput: true });
+    const unsupported = await runningWorker({ name: "mac-codex-2", imageInput: true, agents: ["codex"], agent: "codex" });
+    const upgrade = await runningWorker({ name: "mac-upgrade", imageInput: false });
+    const { cookie } = await browser();
+    const snap = await workspace(cookie);
+    const states = new Map(snap.threads.flatMap((thread) => thread.workers).map((worker) => [worker.id, worker.imageInput]));
+    expect(states.get(ready.workerId)).toBe("ready");
+    expect(states.get(unsupported.workerId)).toBe("unsupported");
+    expect(states.get(upgrade.workerId)).toBe("upgrade_required");
+    ready.fake.close();
+    unsupported.fake.close();
+    upgrade.fake.close();
+  }, 30_000);
+
   it("rejects ordinary messages and closed-report replies before sh_inbound/outbox/link", async () => {
     const { cookie, csrf } = await browser();
     const image = await upload(cookie, csrf);
@@ -318,8 +359,10 @@ describe("main composer attachments", { timeout: 30_000 }, () => {
 
     const { cookie, csrf } = await browser();
     const image = await upload(cookie, csrf);
+    expect((await workspace(cookie)).attention.find((entry) => entry.id === card!.id)?.imageReply).toBe("ready");
+    const msgId = `web-${crypto.randomUUID()}`;
     const res = await postMessage(cookie, csrf, {
-      id: `web-${crypto.randomUUID()}`,
+      id: msgId,
       text: "用第二个方案",
       replyTo: card!.id,
       attachments: [image.id],
@@ -331,12 +374,33 @@ describe("main composer attachments", { timeout: 30_000 }, () => {
       expect.objectContaining({ id: image.id, mimeType: "image/png", bytes: 64 }),
     ]);
     expect(JSON.stringify(args)).not.toContain("data:image");
+    const sent = await waitWorkspaceAttachment(cookie, msgId, "sent");
+    expect(sent.messages.find((entry) => entry.id === `user:web:${msgId}`)?.attachments).toEqual([
+      expect.objectContaining({ id: image.id, mimeType: "image/png", bytes: 64, state: "sent" }),
+    ]);
     expect((await counts()).links).toBe(2); // one msg link + one cmd link
     const linkTypes = await runInDurableObject(ownerStub(), (instance: Steward) => {
       const sql = (instance as unknown as { sql: (strings: TemplateStringsArray) => Array<Record<string, string>> }).sql.bind(instance);
       return sql`SELECT refType FROM sh_attachment_link ORDER BY refType`;
     });
     expect(linkTypes.map((row) => row.refType)).toEqual(["cmd", "msg"]);
+    fake.send({ t: "cmd_ack", re: send.id, status: "accepted" });
+    fake.send({ t: "cmd_result", re: send.id, ok: true, data: { remoteWorkerId: "x" } });
+    const delivered = await waitWorkspaceAttachment(cookie, msgId, "delivered");
+    expect(delivered.messages.find((entry) => entry.id === `user:web:${msgId}`)?.attachments?.[0]?.state).toBe("delivered");
+
+    await runInDurableObject(ownerStub(), (instance: Steward) => {
+      const sql = (instance as unknown as { sql: (strings: TemplateStringsArray, ...values: unknown[]) => unknown }).sql.bind(instance);
+      sql`UPDATE outbox SET state = 'failed' WHERE cmdId = ${send.id}`;
+    });
+    await waitWorkspaceAttachment(cookie, msgId, "failed");
+
+    await runInDurableObject(ownerStub(), (instance: Steward) => {
+      const sql = (instance as unknown as { sql: (strings: TemplateStringsArray, ...values: unknown[]) => unknown }).sql.bind(instance);
+      sql`UPDATE sh_attachment SET expiresAt = 0 WHERE id = ${image.id}`;
+    });
+    const expired = await waitWorkspaceAttachment(cookie, msgId, "expired");
+    expect(JSON.stringify(expired)).not.toMatch(/data:image|iVBORw0KGgo|base64/);
     const snap = await ownerStub().debugSnapshot();
     expect(snap.questions.find((q) => q.qid === qid)).toMatchObject({ status: "answered" });
     fake.close();

@@ -11,6 +11,7 @@ import { isSpendQuery } from "./budget.ts";
 import { decideContinuation, renderHandoffBrief, type NewSessionReason } from "./handoff.ts";
 import type { Ledger, OfflineDispatchRow, ThreadRow, WorkerRow } from "./ledger.ts";
 import { offlineAskCard, askUserCard } from "./report-template.ts";
+import { imageInputState } from "./image-capability.ts";
 
 const ADD_MACHINE_RE = /^\/(?:加机器|添加机器|add-machine|addmachine)\s*$/;
 const WEB_RE = /^\/(?:网页|web|login)\s*$/;
@@ -420,11 +421,11 @@ export class Dispatcher {
       };
     }
     if (input.attachments && input.attachments.length > 0) {
-      if (worker.agent !== "pi") {
+      const imageState = imageInputState(worker.agent, this.ledger.machines.get(worker.deviceId)?.agentCaps);
+      if (imageState === "unsupported") {
         return { kind: "refused", reason: `worker ${input.workerId} 的 agent 不是 Pi，不能接收图片。` };
       }
-      const agent = this.ledger.machines.get(worker.deviceId)?.agentCaps?.find((entry) => entry.kind === "pi");
-      if (agent?.imageInput !== "reference") {
+      if (imageState !== "ready") {
         return { kind: "refused", reason: "这台机器的 Connector 还不能按引用读取图片，请先运行 orbit upgrade。" };
       }
     }

@@ -11,6 +11,8 @@ import { dayKey, formatClock, formatDay, formatRelative, formatUsd, trimOpenMark
 import { modelPicker } from './model-picker.js';
 import { markup } from './markup.js';
 import { mountSessionViewer } from './session.js';
+import { attachmentThumbnails, createAttachmentDraft, releasePendingAttachments } from './attachment-ui.js';
+import { attachmentControl, attachmentErrorKey } from './attachment-model.js';
 import {
   ACTION_KEYS, FATAL_COPY, KNOWN_TITLES, attentionFor, groupByDay, groupThreads, isActiveWorker, messagesFor, modelAfterProviderChange, thinkingAfterModelChange, availableChatModels, initialSetupStep, previewOf, summarize, withPending, workOn,
 } from './model.js';
@@ -46,6 +48,8 @@ const state = {
   settingsError: false,
   changingModel: false,
   onboarding: null, // { step: 'model' | 'security', passkeyAdd, confirm }
+  attachments: null, // attachment draft editor (createAttachmentDraft)
+  attachTarget: null, // replyTo id the current draft belongs to
 
 };
 
@@ -217,6 +221,7 @@ function userMessage(message) {
   const thread = state.selected ? null : threadById(message.threadId);
   return h('article', { class: `user-message${message.pending === 'sending' ? ' is-pending' : ''}${failed ? ' is-failed' : ''}`, id: message.id },
     h('div', { class: 'user-body' }, message.text),
+    message.attachments?.length ? attachmentThumbnails(message.attachments) : null,
     h('div', { class: 'user-meta' },
       `${t('you')} · ${formatClock(message.at)}${thread ? ` · ${thread.title}` : ''}`,
       message.channel === 'feishu' ? h('span', { class: 'channel-tag' }, t('viaFeishu')) : null,
@@ -356,6 +361,7 @@ function renderPane() {
   }
   renderSessionHeader(thread, worker);
   if (state.viewer?.workerId === worker.id) {
+    state.viewer.handle.setImageInput(worker.imageInput);
     state.viewer.handle.update();
     return;
   }
@@ -365,6 +371,8 @@ function renderPane() {
     handle: mountSessionViewer($('#session-body'), {
       workerId: worker.id,
       agentLabel: agentName(worker.agent),
+      imageInput: worker.imageInput,
+      getCsrf: () => state.csrf,
       isActive: () => {
         const live = findWorker(worker.id);
         return live ? isActiveWorker(live) : false;
@@ -410,6 +418,20 @@ function renderComposer() {
   const thread = state.selected ? threadById(state.selected) : null;
   const target = state.replyTo ? state.snapshot.attention.find((item) => item.id === state.replyTo) : null;
   if (state.replyTo && !target) state.replyTo = null; // the card was handled in the meantime
+  if (state.replyTo !== state.attachTarget) {
+    state.attachments?.clear();
+    state.attachTarget = state.replyTo;
+  }
+  const control = attachmentControl(target?.imageReply);
+  if ((!control.visible || !control.enabled) && state.attachments?.hasItems()) state.attachments.clear();
+  const attach = $('#attach-button');
+  attach.hidden = !control.visible;
+  attach.disabled = !control.enabled;
+  attach.title = control.messageKey ? t(control.messageKey) : t('attachImage');
+  attach.setAttribute('aria-label', attach.title);
+  const hint = $('#attachment-hint');
+  hint.hidden = !control.visible || !control.messageKey;
+  hint.textContent = hint.hidden ? '' : t(control.messageKey);
   $('#scope-label').textContent = thread ? t('scopedRoute', { title: thread.title }) : t('autoRoute');
   $('#scope-chip').title = thread ? thread.title : t('routeHelp');
   $('#scope-chip').classList.toggle('scoped', Boolean(thread));
@@ -420,6 +442,15 @@ function renderComposer() {
   chip.replaceChildren(...(target
     ? [icon('help'), h('span', null, t('replyingTo', { title: cardHeading(target) })), h('button', { type: 'button', dataset: { action: 'clear-reply' }, 'aria-label': t('clearReply'), title: t('clearReply') }, icon('close'))]
     : []));
+  updateComposerSend();
+}
+
+function updateComposerSend() {
+  const input = $('#message-input');
+  const draft = state.attachments;
+  const textReady = Boolean(input.value.trim()) && !state.changingModel;
+  const attachmentsReady = !draft?.hasItems() || draft.ready();
+  $('#send-button').disabled = !textReady || !attachmentsReady;
 }
 
 function providerChoiceName(provider) {
@@ -468,7 +499,7 @@ async function changeComposerModel(input) {
   finally {
     state.changingModel = false;
     renderComposer();
-    $('#send-button').disabled = state.changingModel || !$('#message-input').value.trim();
+    updateComposerSend();
   }
 }
 
@@ -476,7 +507,10 @@ async function changeComposerModel(input) {
 
 function activityItem(entry) {
   const label = tOr(`kind_${entry.kind}`, entry.kind);
-  const body = h('div', { class: 'activity-item' }, h('time', null, ago(entry.at)), h('p', null, h('span', { class: 'timeline-kind' }, label), entry.text));
+  const body = h('div', { class: 'activity-item' },
+    h('time', null, ago(entry.at)),
+    h('p', null, h('span', { class: 'timeline-kind' }, label), entry.text),
+    entry.attachments?.length ? attachmentThumbnails(entry.attachments) : null);
   const thread = entry.threadId ? threadById(entry.threadId) : null;
   return thread ? h('a', { class: 'activity-link', href: `/app/threads/${thread.id}`, dataset: { nav: thread.id } }, body) : body;
 }
@@ -1273,7 +1307,12 @@ function accept(data) {
   state.snapshot = data;
   state.skew = data.now - Date.now();
   for (const message of data.messages) {
-    if (message.id.startsWith('user:web:')) state.pending.delete(message.id.slice('user:web:'.length));
+    if (message.id.startsWith('user:web:')) {
+      const id = message.id.slice('user:web:'.length);
+      const pending = state.pending.get(id);
+      releasePendingAttachments(pending?.attachments);
+      state.pending.delete(id);
+    }
   }
   if (state.selected && !threadById(state.selected)) {
     state.selected = null; // archived or gone: fall back to the whole conversation
@@ -1366,15 +1405,24 @@ function showLive(frame) {
 
 async function postMessage(entry) {
   entry.status = 'sending';
+  if (entry.attachments) entry.attachments = entry.attachments.map((attachment) => ({ ...attachment, state: 'sent' }));
   renderFeed(true);
   renderComposer();
   try {
-    const { status, data } = await request('/app/api/messages', { id: entry.id, text: entry.text, threadId: entry.threadId ?? undefined, replyTo: entry.replyTo ?? undefined });
+    const { status, data } = await request('/app/api/messages', {
+      id: entry.id,
+      text: entry.text,
+      threadId: entry.threadId ?? undefined,
+      replyTo: entry.replyTo ?? undefined,
+      ...(entry.attachments?.length ? { attachments: entry.attachments.map((item) => item.id) } : {}),
+    });
     if (status === 202) {
       await refresh();
       return;
     }
+    const attachmentKey = data?.error ? attachmentErrorKey(data.error) : null;
     if (status === 429) toast(t('queueFull'));
+    else if (attachmentKey && attachmentKey !== 'attachFailed') toast(t(attachmentKey));
     else if (status === 400 || status === 413) toast(t('tooLong'));
     else if (status !== 401) toast(t('sendFailed'));
     if (data?.error === 'id_conflict') state.pending.delete(entry.id);
@@ -1382,6 +1430,7 @@ async function postMessage(entry) {
     toast(t('sendFailed'));
   }
   entry.status = 'failed';
+  if (entry.attachments) entry.attachments = entry.attachments.map((attachment) => ({ ...attachment, state: 'failed' }));
   renderFeed(true);
   renderComposer();
 }
@@ -1390,7 +1439,23 @@ function send() {
   const input = $('#message-input');
   const text = input.value;
   if (!text.trim() || state.changingModel) return;
-  const entry = { id: uuid(), text, threadId: state.selected, replyTo: state.replyTo, at: Date.now(), status: 'sending' };
+  const draft = state.attachments;
+  if (draft?.hasItems() && !draft.ready()) {
+    toast(t('attachUploading'));
+    return;
+  }
+  const hadAttachments = Boolean(draft?.hasItems());
+  const attachments = hadAttachments ? draft.take() : null;
+  if (hadAttachments && !attachments) return;
+  const entry = {
+    id: uuid(),
+    text,
+    threadId: state.selected,
+    replyTo: state.replyTo,
+    at: Date.now(),
+    status: 'sending',
+    ...(attachments?.length ? { attachments } : {}),
+  };
   state.pending.set(entry.id, entry);
   input.value = '';
   state.drafts.delete(scopeKey());
@@ -1771,7 +1836,7 @@ function go({ thread = null, worker = null } = {}, { push = true } = {}) {
   state.selected = next;
   state.session = nextWorker;
   input.value = state.drafts.get(scopeKey()) ?? '';
-  $('#send-button').disabled = !input.value.trim();
+  updateComposerSend();
   if (push && changed) history.pushState(null, '', urlFor(next, nextWorker));
   setMobile('chat');
   $('#workspace').classList.remove('context-overlay');
@@ -1842,6 +1907,7 @@ function closeDetails() {
 function changeLanguage(locale) {
   if (!setLocale(locale)) return;
   renderAll();
+  state.attachments?.refresh();
   state.viewer?.handle.relabel();
   resizeInput();
 }
@@ -1866,7 +1932,7 @@ $('#composer-form').addEventListener('submit', (event) => {
   send();
 });
 $('#message-input').addEventListener('input', () => {
-  $('#send-button').disabled = state.changingModel || !$('#message-input').value.trim();
+  updateComposerSend();
   resizeInput();
 });
 $('#message-input').addEventListener('keydown', (event) => {
@@ -1980,6 +2046,8 @@ document.addEventListener('click', (event) => {
     case 'clear-reply':
       state.replyTo = null;
       return renderComposer();
+    case 'attach':
+      return $('#attachment-input').click();
     case 'sign-out': return void signOut();
     case 'create-pairing': return void createPairing();
     case 'copy-pairing': return void copyPairing();
@@ -2075,6 +2143,24 @@ document.addEventListener('submit', (event) => {
 
 applyStatic();
 paintIcons();
+state.attachments = createAttachmentDraft({
+  getCsrf: () => state.csrf,
+  onError: (key) => toast(t(key)),
+  onChange: () => updateComposerSend(),
+});
+$('#composer-drafts').append(state.attachments.element);
+$('#attachment-input').addEventListener('change', (event) => {
+  const files = [...(event.target.files ?? [])];
+  if (files.length) state.attachments.addFiles(files);
+  event.target.value = '';
+});
+$('#message-input').addEventListener('paste', (event) => {
+  if ($('#attach-button').hidden || $('#attach-button').disabled) return;
+  const files = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith('image/'));
+  if (!files.length) return;
+  event.preventDefault();
+  state.attachments.addFiles(files);
+});
 try {
   $('#workspace').classList.toggle('sidebar-hidden', localStorage.getItem('sig.sidebar.hidden') === 'true');
   $('#workspace').classList.toggle('context-hidden', localStorage.getItem('sig.context.hidden') === 'true');
