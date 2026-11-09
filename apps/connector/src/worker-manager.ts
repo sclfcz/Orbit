@@ -325,7 +325,7 @@ export class WorkerManager {
       kind: a.kind,
       version: a.version,
       capabilities: a.capabilities,
-      ...(a.kind === "pi" ? { imageInput: "reference" as const } : {}),
+      ...(a.capabilities.images ? { imageInput: "reference" as const } : {}),
     }));
   }
 

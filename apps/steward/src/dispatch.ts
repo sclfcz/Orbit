@@ -423,7 +423,7 @@ export class Dispatcher {
     if (input.attachments && input.attachments.length > 0) {
       const imageState = imageInputState(worker.agent, this.ledger.machines.get(worker.deviceId)?.agentCaps);
       if (imageState === "unsupported") {
-        return { kind: "refused", reason: `worker ${input.workerId} 的 agent 不是 Pi，不能接收图片。` };
+        return { kind: "refused", reason: `worker ${input.workerId} 的 agent 暂不支持图片，请改用 Pi 或去掉图片。` };
       }
       if (imageState !== "ready") {
         return { kind: "refused", reason: "这台机器的 Connector 还不能按引用读取图片，请先运行 orbit upgrade。" };

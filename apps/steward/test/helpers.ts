@@ -391,8 +391,10 @@ export class FakeConnector {
   historySilent = false;
   /** Advertises the directory browsing capability in hello (off = old connector). */
   directoryBrowse = false;
-  /** ADR-0014: advertise Pi's reference image input in hello (off = old connector). */
+  /** ADR-0014: advertise reference image input in hello for the kinds in imageInputKinds (off = old connector). */
   imageInput = false;
+  /** Which agent kinds get imageInput when imageInput is on; Pi only by default. */
+  imageInputKinds: string[] = ["pi"];
   /** Every directory_list request received so far. */
   readonly directoryRequests: Array<Record<string, unknown>> = [];
   /** Every history_req the machine was asked (the full-session reads carry `format`/`since`). */
@@ -448,7 +450,7 @@ export class FakeConnector {
         kind,
         version: "1.0.0-test",
         capabilities: caps(kind),
-        ...(kind === "pi" && this.imageInput ? { imageInput: "reference" as const } : {}),
+        ...(this.imageInput && this.imageInputKinds.includes(kind) ? { imageInput: "reference" as const } : {}),
       })),
       repos: this.repos.map((r) => ({
         repoId: r.repoId,
