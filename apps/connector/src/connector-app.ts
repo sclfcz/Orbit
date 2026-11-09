@@ -66,7 +66,7 @@ export function defaultAdapters(stateDir: string, claudeCommand: string[] = ["cl
     adapters.push(new ClaudeAdapter({ stateDir, command: claudeCommand, version: claude.version }));
   }
   const codex = detectCodex(codexCommand);
-  if (codex.installed) adapters.push(new CodexAdapter({ command: codexCommand, version: codex.version }));
+  if (codex.installed) adapters.push(new CodexAdapter({ command: codexCommand, version: codex.version, stateDir }));
   else log?.("codex_unavailable", { diagnostic: codex.diagnostic });
   return adapters;
 }

@@ -1,7 +1,7 @@
 // End-to-end: a `start_worker` command arriving over the real transport (mock steward)
 // drives the WorkerManager + fake-pi, and the started → progress → report(+git) → settled
 // events come back on the same socket — issue #3's acceptance path over #30's transport.
-import { rmSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { join } from "node:path";
@@ -11,6 +11,9 @@ import { CodexAdapter } from "../src/codex-adapter.ts";
 import { LocalStore } from "../src/store.ts";
 import { fakePiAdapter, makeGitRepo, reportRun, tmpDir, waitFor, writeScenario } from "./helpers.ts";
 import { startMockSteward, type MockSteward } from "./mock-steward.ts";
+
+const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+const PNG_BYTES = Buffer.from(PNG_BASE64, "base64");
 
 let dir: string;
 let stateDir: string;
@@ -64,6 +67,27 @@ describe("start_worker over the real transport (issue #3 + #30)", () => {
     expect(history.entries.length).toBeGreaterThan(0);
     const result = mock.events().filter((e) => e.type === "report")[0]!;
     expect(result).toMatchObject({ answer: "42", status: "done" });
+  }, 30000);
+  it("re-delivers a durably queued Codex message with its image as localImage", async () => {
+    app = new ConnectorApp({ store, stateDir, adapters: [
+      new CodexAdapter({ command: [process.execPath, join(import.meta.dirname, "fake-codex.mjs")],
+        env: { FAKE_CODEX_DIR: dir, FAKE_CODEX_OPTIONS: JSON.stringify({ holdFirstUntilFile: "release-first-turn" }) },
+        stateDir })] });
+    await app.start(); await mock.waitConnected(); await mock.waitHello();
+    const start = mock.sendCmd("start_worker", { workerId: "w-e2e-1", threadId: "codex-image-queue", repoId: repo, mode: "write", agent: "codex", prompt: "task" });
+    expect(await waitFor(() => mock.resultsFor(start))).toMatchObject({ ok: true });
+    await waitFor(() => store.getWorker("w-e2e-1")?.state === "running", 10_000, "worker running");
+    const send = mock.sendCmd("send", { workerId: "w-e2e-1", text: "after this turn",
+      images: [{ data: PNG_BASE64, mimeType: "image/png" }], intent: "after" });
+    expect(await waitFor(() => mock.resultsFor(send))).toMatchObject({ ok: true, data: { delivery: "queued", effect: "after_run_end" } });
+    writeFileSync(join(dir, "release-first-turn"), "release");
+    await waitFor(() => mock.events().filter((e) => e.type === "report").length === 2, 15_000, "queued image turn report");
+    // Only the deferred turn carried an image, and it existed when Codex received it.
+    const recorded = readFileSync(join(dir, "images.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({ method: "turn/start", images: [{ exists: true, size: PNG_BYTES.length }] });
+    expect(readdirSync(join(stateDir, "codex-images"))).toEqual([]);
+    expect(store.deferred("w-e2e-1", true)).toContainEqual(expect.objectContaining({ state: "delivered", text: "after this turn" }));
   }, 30000);
   it.each(["send", "resume"])("returns a retryable native Codex conflict over WS for cold %s without input", async (kind) => {
     const adapter = new CodexAdapter({ command: [process.execPath, join(import.meta.dirname, "fake-codex.mjs")],

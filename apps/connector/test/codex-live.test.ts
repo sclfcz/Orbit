@@ -2,7 +2,7 @@
 // Never joins a desktop session, rewrites global config, copies auth, pushes or deploys.
 import { describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CodexAdapter, detectCodex } from "../src/codex-adapter.ts";
 import { CodexTransport } from "../src/codex-transport.ts";
@@ -11,6 +11,7 @@ import { codexSessionPath, inspectCodexTail } from "../src/codex-session.ts";
 import { readFullSessionHistory } from "../src/full-session-history.ts";
 import { git, makeGitRepo, tmpDir, waitFor } from "./helpers.ts";
 import { findCorrelatedShellEvidence } from "./codex-live-helpers.ts";
+import { textPng } from "./png-text.ts";
 import { VERSION } from "../src/version.ts";
 
 describe.skipIf(process.env.ORBIT_CODEX_LIVE !== "1")("real Codex acceptance", () => {
@@ -144,6 +145,35 @@ describe.skipIf(process.env.ORBIT_CODEX_LIVE !== "1")("real Codex acceptance", (
       }));
     } finally { await a.stopProcess("live-clean-readonly"); }
   }, 120000);
+
+  it("reads a random label from an attached PNG and deletes its local copy at turn end", async () => {
+    const dir = tmpDir("orbit-codex-live-image"); const repo = await makeGitRepo(dir);
+    const stateDir = join(dir, "state");
+    // Excludes glyph pairs this block font can make ambiguous (0/O, 1/I, 5/S, G/6, Q/O).
+    const alphabet = "ACDEFHJKLMNPRTXY2346789";
+    const label = Array.from({ length: 6 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
+    const png = textPng(label, 16);
+    const a = new CodexAdapter({ requestTimeoutMs: 20000, stateDir });
+    const events: any[] = []; a.on("worker-event", (e) => events.push(e));
+    const imageDir = join(stateDir, "codex-images");
+    try {
+      await a.start({ workerId: "live-image", threadId: "test", cwd: repo, mode: "write", commandId: "live-image",
+        prompt: "A single image is attached to this message. It shows a six-character label in large block letters and digits. " +
+          "Read the label directly from the attached image; do not use shell tools, OCR binaries, network or external tools. " +
+          "Report the exact six characters, uppercase and without spaces, in the answer field of the required JSON report.",
+        images: [{ data: png.toString("base64"), mimeType: "image/png" }] });
+      // The file must still be readable by the app-server while the turn runs.
+      expect(readdirSync(imageDir)).toHaveLength(1);
+      const settled = await waitFor(() => events.find((e) => e.type === "settled"), 120000, "real Codex image report");
+      expect(settled.outcome).toBe("reported");
+      expect(settled.report.answer.replace(/\s+/g, "").toUpperCase()).toContain(label);
+      expect(readdirSync(imageDir)).toEqual([]);
+      writeFileSync("/tmp/orbit-codex-live-image.json", JSON.stringify({
+        version: detectCodex().version, label, answer: settled.report.answer,
+        imageRead: "passed", tempFileRemoved: true, testRepo: repo,
+      }));
+    } finally { await a.stopProcess("live-image"); }
+  }, 150000);
 
   it("steers and interrupts a real shell job without leaving background writes alive", async () => {
     const dir = tmpDir("orbit-codex-live-controls"); const repo = await makeGitRepo(dir);

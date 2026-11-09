@@ -1,6 +1,6 @@
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 const options = JSON.parse(process.env.FAKE_CODEX_OPTIONS || '{}');
 if (process.argv.includes('--version')) { console.log(process.argv.find(v => v.startsWith('--fake-version='))?.slice('--fake-version='.length) || 'codex-cli 0.166.0-alpha.6'); process.exit(0); }
@@ -17,6 +17,17 @@ const emit = (value) => {
   else process.stdout.write(text);
 };
 const notify = (method, params) => emit({ method, params: { threadId: id, ...params } });
+// Record the exact localImage inputs at the moment the app-server receives them: an
+// adapter that deletes a file too early must fail this evidence, not silently pass.
+const recordImages = (method, turnId, input) => {
+  const images = (Array.isArray(input) ? input : []).filter((item) => item?.type === 'localImage');
+  if (!images.length) return;
+  appendFileSync(join(dir, 'images.jsonl'), JSON.stringify({ method, turnId, images: images.map((item) => ({
+    path: item.path,
+    exists: existsSync(item.path),
+    size: existsSync(item.path) ? statSync(item.path).size : null,
+  })) }) + '\n');
+};
 let turn = 0;
 let active;
 function finish(turnId, status = 'completed') {
@@ -68,6 +79,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     }
     if (options.malformed) { process.stdout.write('not-json\n'); return; }
     const turnId = `turn-${++turn}`; active = turnId;
+    recordImages('turn/start', turnId, req.params.input);
     append('event_msg', { type: 'task_started', turn_id: turnId });
     append('response_item', { type: 'message', role: 'user', content: [{ type: 'input_text', text: req.params.input[0].text }] });
     if (options.exitBeforeReceipt) process.exit(0);
@@ -81,6 +93,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     else if (!options.hold && !options.early) setTimeout(() => finish(turnId, options.failed ? 'failed' : 'completed'), options.delay ?? 20);
   } else if (req.method === 'turn/steer') {
     if (options.rejectSteer) { emit({ id: req.id, error: { code: options.rejectSteer, message: 'rejected steer' } }); return; }
+    recordImages('turn/steer', active, req.params.input);
     if (req.params.expectedTurnId !== active) emit({ id: req.id, error: { code: -1, message: 'turn mismatch' } });
     else reply({ turnId: active });
   } else if (req.method === 'turn/interrupt') {
