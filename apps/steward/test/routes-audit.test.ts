@@ -39,6 +39,7 @@ const PROBE_PATHS = [
   "/api/pairing",
   "/api/login-link",
   "/app/unknown", // unknown app pages are not a login-gated route index
+  "/connector/attachments/not-an-id", // ADR-0014 device read: bearer only
   "/setup", // removed with the Feishu channel (ADR-0003) — stays a 404 forever
   "/channels/feishu/events", // removed with the Feishu channel (ADR-0003) — stays a 404 forever
 ];

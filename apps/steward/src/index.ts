@@ -169,6 +169,12 @@ export default {
       return json({ error: "invalid code" }, 400);
     }
 
+    if (url.pathname.startsWith("/connector/attachments/")) {
+      if (request.method !== "GET") return new Response("not found", { status: 404 });
+      const stub = await getAgentByName(env.Steward, "owner");
+      return stub.fetch(request);
+    }
+
     if (url.pathname.startsWith("/api/")) {
       const allowed =
         (url.pathname === "/api/messages" && (request.method === "POST" || request.method === "GET")) ||

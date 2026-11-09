@@ -55,6 +55,7 @@ export async function resetLedgerState(): Promise<void> {
       "sh_timeline", "sh_question", "sh_notify", "sh_offline_dispatch", "sh_note", "sh_note_log", "event_inbox", "worker_ack", "outbox",
       "sh_web_link", "sh_web_session", "sh_web_request", "sh_web_pairing", "sh_deploy", "device", "pairing", "sh_reap_pending", "sh_pr_consent",
       "sh_web_credential", "sh_web_webauthn_nonce",
+      "sh_attachment", "sh_attachment_chunk", "sh_attachment_link",
       // sh_usage_day / sh_usage_cursor are NOT here: resetLlmStateForTests (called just
       // above) owns them, because pi's tables and the cursor must reset TOGETHER — dropping
       // both here would leave the cursor absent and swallow the next run's spend as a
@@ -390,6 +391,8 @@ export class FakeConnector {
   historySilent = false;
   /** Advertises the directory browsing capability in hello (off = old connector). */
   directoryBrowse = false;
+  /** ADR-0014: advertise Pi's reference image input in hello (off = old connector). */
+  imageInput = false;
   /** Every directory_list request received so far. */
   readonly directoryRequests: Array<Record<string, unknown>> = [];
   /** Every history_req the machine was asked (the full-session reads carry `format`/`since`). */
@@ -441,7 +444,12 @@ export class FakeConnector {
       ...(this.directoryBrowse ? { capabilities: { directoryBrowse: true } } : {}),
       workers: this.workers,
       machine: { name: this.machineName, memTotalMB: 65536, memFreeMB: 31000 },
-      agents: this.agents.map((kind) => ({ kind, version: "1.0.0-test", capabilities: caps(kind) })),
+      agents: this.agents.map((kind) => ({
+        kind,
+        version: "1.0.0-test",
+        capabilities: caps(kind),
+        ...(kind === "pi" && this.imageInput ? { imageInput: "reference" as const } : {}),
+      })),
       repos: this.repos.map((r) => ({
         repoId: r.repoId,
         name: r.name,

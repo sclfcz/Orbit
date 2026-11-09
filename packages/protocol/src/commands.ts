@@ -21,6 +21,22 @@ export const UnregisterRepoResultSchema = z.object({
 });
 export type UnregisterRepoResult = z.infer<typeof UnregisterRepoResultSchema>;
 
+/** ADR-0014: the only image types the Steward accepts. */
+export const ImageAttachmentMimeSchema = z.enum(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+export type ImageAttachmentMime = z.infer<typeof ImageAttachmentMimeSchema>;
+
+/** What an outbound command carries: a reference, never base64 bytes. The connector pulls
+ *  the bytes from the Steward and verifies this metadata before handing them to an adapter. */
+export const ImageAttachmentRefSchema = z.strictObject({
+  id: z.string().min(1).max(64),
+  mimeType: ImageAttachmentMimeSchema,
+  bytes: z.number().int().positive(),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+});
+export type ImageAttachmentRef = z.infer<typeof ImageAttachmentRefSchema>;
+
+export const ImageAttachmentRefsSchema = z.array(ImageAttachmentRefSchema).min(1).max(4);
+
 export const CmdMessageSchema = z.object({
   t: z.literal("cmd"),
   id: z.string(),

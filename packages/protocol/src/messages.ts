@@ -11,6 +11,9 @@ const AgentCapabilitySchema = z.object({
   kind: z.string(),
   version: z.string(),
   capabilities: z.record(z.string(), z.boolean()),
+  /** ADR-0014: the agent can take attachment references and pull their bytes. Absent on
+   *  older connectors, which must be told to upgrade before an image is dispatched. */
+  imageInput: z.literal("reference").optional(),
 });
 
 const RepoCapabilitySchema = z.discriminatedUnion("kind", [
@@ -105,6 +108,11 @@ const ErrorCode = z.enum([
   "too_large",
   "rate_limited",
   "internal",
+  // ADR-0014 attachment refusal codes surfaced to an open session view.
+  "attachments_not_allowed",
+  "attachment_not_found",
+  "unsupported_capability",
+  "upgrade_required",
   // History relay (§6.6): the worker exists but has no session to read (connector-pi.md §11.4).
   "no_history",
 ]);

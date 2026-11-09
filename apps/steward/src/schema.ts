@@ -966,4 +966,45 @@ export const MIGRATIONS: readonly Migration[] = [
       sql`CREATE INDEX IF NOT EXISTS web_cmd_relay_conn ON web_cmd_relay (webConnId)`;
     },
   },
+  {
+    // Image attachments (ADR-0014 phase 2, issue #13): metadata first, bytes in 256 KiB
+    // chunks (the DO SQLite row limit is far above one chunk), and one link row per
+    // reference so a device can only read an attachment a command addresses to it.
+    // state: ready (unreferenced) -> referenced (linked to a message/command); phase 5
+    // turns terminalAt/expiresAt into the 24 h / 7 d / 30 d sweep. `agentCaps` keeps the
+    // full hello.agents snapshot so the Steward can check imageInput without a new table.
+    id: "027_attachments",
+    up: (sql) => {
+      sql`CREATE TABLE IF NOT EXISTS sh_attachment (
+        id TEXT PRIMARY KEY,
+        mimeType TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        uploadId TEXT NOT NULL UNIQUE,
+        state TEXT NOT NULL DEFAULT 'ready',
+        width INTEGER,
+        height INTEGER,
+        createdAt INTEGER NOT NULL,
+        expiresAt INTEGER NOT NULL,
+        terminalAt INTEGER
+      )`;
+      sql`CREATE INDEX IF NOT EXISTS sh_attachment_state_expires ON sh_attachment (state, expiresAt)`;
+      sql`CREATE TABLE IF NOT EXISTS sh_attachment_chunk (
+        attachmentId TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        data BLOB NOT NULL,
+        PRIMARY KEY (attachmentId, position)
+      )`;
+      sql`CREATE TABLE IF NOT EXISTS sh_attachment_link (
+        attachmentId TEXT NOT NULL,
+        refType TEXT NOT NULL,
+        refId TEXT NOT NULL,
+        targetDeviceId TEXT NOT NULL,
+        createdAt INTEGER NOT NULL,
+        PRIMARY KEY (attachmentId, refType, refId)
+      )`;
+      sql`CREATE INDEX IF NOT EXISTS sh_attachment_link_device ON sh_attachment_link (targetDeviceId, refType)`;
+      ignoringDuplicateColumn(() => { sql`ALTER TABLE sh_machine ADD COLUMN agentCaps TEXT`; });
+    },
+  },
 ];

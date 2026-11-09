@@ -12,10 +12,20 @@ import {
   UnregisterRepoArgsSchema,
   type DirectoryBrowseArgs,
   type DirectoryListing,
+  type ImageAttachmentMime,
   type RegisterRepoResult,
   type UnregisterRepoResult,
 } from "@alexlikevibe/protocol";
 import type { Ledger } from "./ledger.ts";
+import {
+  ATTACHMENT_MAX_BYTES,
+  ATTACHMENT_MAX_COUNT,
+  extensionForMime,
+  normalizeMimeType,
+  sniffImageMime,
+  type AttachmentDownload,
+  type StoredAttachment,
+} from "./attachments.ts";
 import {
   WorkspaceError,
   workspaceSnapshot,
@@ -71,6 +81,10 @@ export interface WorkspaceApiDeps {
   addDirectory?(input: MachineDirectoryInput): Promise<MachineDirectoryResult>;
   removeDirectory?(input: MachineDirectoryRemovalInput): Promise<MachineDirectoryRemovalResult>;
   browseDirectory?(input: MachineDirectoryBrowseInput, signal: AbortSignal): Promise<DirectoryListing>;
+  /** ADR-0014 upload: the API validates size/magic bytes, this persists the accepted bytes. */
+  uploadAttachment?(input: { uploadId: string; mimeType: ImageAttachmentMime; bytes: Uint8Array }): Promise<StoredAttachment>;
+  /** Owner read side. Returns null for unknown, expired or deleted attachments. */
+  readAttachment?(id: string): AttachmentDownload | null;
   /** `attestation`/the WebAuthn wire fields stay `unknown` here on purpose (synthesis graft 1):
    *  only webauthn.ts's verifyRegistrationResponse/verifyAssertionResponse ever assert their
    *  shape — this layer validates only that the JSON body is an object with the right keys
@@ -138,16 +152,101 @@ async function readJson(request: Request): Promise<Record<string, unknown>> {
   }
 }
 
+/** Uploads are raw bytes: enforce the cap while reading and cancel immediately, never after
+ *  buffering a whole oversized body. The accepted 3 MiB is then stored in chunks. */
+async function readAttachmentBody(request: Request): Promise<Uint8Array> {
+  const declaredLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > ATTACHMENT_MAX_BYTES) {
+    throw new WorkspaceError("too_large", 413);
+  }
+  const reader = request.body?.getReader();
+  if (!reader) return new Uint8Array(0);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > ATTACHMENT_MAX_BYTES) {
+      await reader.cancel();
+      throw new WorkspaceError("too_large", 413);
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+export function attachmentResponse(id: string, download: AttachmentDownload): Response {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of download.chunks) controller.enqueue(chunk);
+      controller.close();
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: {
+      "content-type": download.mimeType,
+      "content-length": String(download.bytes),
+      "cache-control": "private, no-store",
+      "x-content-type-options": "nosniff",
+      "content-disposition": `inline; filename="attachment-${id}.${extensionForMime(download.mimeType)}"`,
+    },
+  });
+}
+
+async function handleAttachmentUpload(
+  request: Request,
+  deps: WorkspaceApiDeps,
+): Promise<Response> {
+  const uploadId = request.headers.get("x-orbit-upload-id") ?? "";
+  if (!REQUEST_ID.test(uploadId)) throw new WorkspaceError("bad_request");
+  const declared = normalizeMimeType(request.headers.get("content-type"));
+  if (declared === null) throw new WorkspaceError("unsupported_media_type", 415);
+  const bytes = await readAttachmentBody(request);
+  if (bytes.byteLength === 0) throw new WorkspaceError("bad_request");
+  const sniffed = sniffImageMime(bytes);
+  if (sniffed === null || sniffed !== declared) throw new WorkspaceError("unsupported_media_type", 415);
+  const stored = await deps.uploadAttachment!({ uploadId, mimeType: sniffed, bytes });
+  return json({ id: stored.id, mimeType: stored.mimeType, bytes: stored.bytes, sha256: stored.sha256 });
+}
+
 function parseMessage(body: Record<string, unknown>): WorkspaceInput {
-  const { id, text, threadId, replyTo } = body;
+  const { id, text, threadId, replyTo, attachments } = body;
   if (typeof id !== "string" || !REQUEST_ID.test(id)) throw new WorkspaceError("bad_request");
   if (typeof text !== "string" || text.trim() === "" || text.length > MAX_MESSAGE_CHARS) throw new WorkspaceError("bad_request");
   if (threadId !== undefined && (typeof threadId !== "string" || !THREAD_ID.test(threadId))) throw new WorkspaceError("bad_request");
   if (replyTo !== undefined && (typeof replyTo !== "string" || !CARD_ID.test(replyTo))) throw new WorkspaceError("bad_request");
-  return { id, text, ...(threadId ? { threadId } : {}), ...(replyTo ? { replyTo } : {}) };
+  let attachmentIds: string[] | undefined;
+  if (attachments !== undefined) {
+    if (!Array.isArray(attachments) || attachments.length === 0 || attachments.length > ATTACHMENT_MAX_COUNT) {
+      throw new WorkspaceError("bad_request");
+    }
+    if (attachments.some((value) => typeof value !== "string" || !/^[\w-]{1,64}$/.test(value))) {
+      throw new WorkspaceError("bad_request");
+    }
+    if (new Set(attachments).size !== attachments.length) throw new WorkspaceError("duplicate_attachment");
+    attachmentIds = attachments as string[];
+  }
+  return {
+    id,
+    text,
+    ...(threadId ? { threadId } : {}),
+    ...(replyTo ? { replyTo } : {}),
+    ...(attachmentIds ? { attachments: attachmentIds } : {}),
+  };
 }
 
 function parseAction(body: Record<string, unknown>): WorkspaceActionInput {
+  // ADR-0014: a card action is not a worker-bound message route; never let an attachment
+  // ride along and become an unreferenced orphan.
+  if (body.attachments !== undefined) throw new WorkspaceError("attachments_not_allowed");
   const { id, cardId, action } = body;
   if (typeof id !== "string" || !REQUEST_ID.test(id)) throw new WorkspaceError("bad_request");
   if (typeof cardId !== "string" || !CARD_ID.test(cardId)) throw new WorkspaceError("bad_request");
@@ -183,16 +282,28 @@ export async function handleWorkspaceApi(request: Request, url: URL, session: Ap
     });
   }
   if (url.pathname === "/app/api/settings" && request.method === "GET" && deps.settings) return json(await deps.settings());
+  const ownerAttachment = /^\/app\/api\/attachments\/([\w-]{1,64})$/.exec(url.pathname);
+  if (ownerAttachment && request.method === "GET") {
+    if (!deps.readAttachment) return json({ error: "not_found" }, 404);
+    const download = deps.readAttachment(ownerAttachment[1]!);
+    return download ? attachmentResponse(ownerAttachment[1]!, download) : json({ error: "not_found" }, 404);
+  }
   if (request.method !== "POST") return json({ error: "not_found" }, 404);
 
   const origin = request.headers.get("origin");
-  const requireOrigin = deps.requireOrigin || url.pathname.startsWith("/app/api/machines/directories");
+  const requireOrigin = deps.requireOrigin ||
+    url.pathname.startsWith("/app/api/machines/directories") ||
+    url.pathname === "/app/api/attachments";
   if (!sameSecret(request.headers.get("x-csrf-token") ?? "", session.csrf) || (requireOrigin ? origin !== url.origin : origin !== null && origin !== url.origin)) {
     return json({ error: "forbidden" }, 403);
   }
-  if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) return json({ error: "json_required" }, 415);
+  const upload = url.pathname === "/app/api/attachments" && request.method === "POST" && deps.uploadAttachment !== undefined;
+  if (!upload && !request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
+    return json({ error: "json_required" }, 415);
+  }
 
   try {
+    if (upload) return await handleAttachmentUpload(request, deps);
     if ((url.pathname === "/app/api/settings/webauthn/register/options" ||
          url.pathname === "/app/api/settings/webauthn/register/verify" ||
          url.pathname === "/app/api/settings/webauthn/remove") && !session.recent) {

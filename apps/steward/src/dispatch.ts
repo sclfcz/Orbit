@@ -6,7 +6,7 @@
 // links — security-sensitive, and they must work without the model. Card button callbacks
 // stay deterministic too (steward.md §3.1 signal 1): the Thread is resolved from the card's
 // providerMsgId, never from data stuffed into the button.
-import { ulid } from "@alexlikevibe/protocol";
+import { ulid, type ImageAttachmentRef } from "@alexlikevibe/protocol";
 import { isSpendQuery } from "./budget.ts";
 import { decideContinuation, renderHandoffBrief, type NewSessionReason } from "./handoff.ts";
 import type { Ledger, OfflineDispatchRow, ThreadRow, WorkerRow } from "./ledger.ts";
@@ -154,6 +154,10 @@ export interface SendToWorkerInput {
   workerId: string;
   text: string;
   intent: "now" | "after" | "auto";
+  /** ADR-0014: reference-only attachments; the caller has validated ownership and totals. */
+  attachments?: ImageAttachmentRef[];
+  /** The owner message that authorized an open-question answer, for the msg link. */
+  sourceMsgId?: string;
   /** The authorizing run: `user:<msgId>` / `evt:…` (steward.md §7.1). */
   provenance: string;
   /** `tool:<taskId>` — the idempotency key for replays (protocol §7.1). */
@@ -191,7 +195,13 @@ export interface DispatcherDeps {
     deviceId: string,
     kind: string,
     args: Record<string, unknown>,
-    opts: { workerId?: string; notAfter?: number | null; cmdId?: string; held?: boolean },
+    opts: {
+      workerId?: string;
+      notAfter?: number | null;
+      cmdId?: string;
+      held?: boolean;
+      links?: Array<{ attachmentId: string; refType: "msg" | "cmd"; refId: string; targetDeviceId: string }>;
+    },
   ) => Promise<{ cmdId: string }>;
   /** Withdraws a still-queued command; false once it has left the DO. */
   cancelQueuedCommand: (cmdId: string) => boolean;
@@ -409,6 +419,15 @@ export class Dispatcher {
         reason: `worker ${input.workerId} 已损坏（需要人工决定），指令不会被送达。先和用户确认下一步。`,
       };
     }
+    if (input.attachments && input.attachments.length > 0) {
+      if (worker.agent !== "pi") {
+        return { kind: "refused", reason: `worker ${input.workerId} 的 agent 不是 Pi，不能接收图片。` };
+      }
+      const agent = this.ledger.machines.get(worker.deviceId)?.agentCaps?.find((entry) => entry.kind === "pi");
+      if (agent?.imageInput !== "reference") {
+        return { kind: "refused", reason: "这台机器的 Connector 还不能按引用读取图片，请先运行 orbit upgrade。" };
+      }
+    }
     const delivery =
       worker.state === "running" || worker.state === "recovering"
         ? input.intent === "after"
@@ -425,8 +444,26 @@ export class Dispatcher {
     const { cmdId } = await this.#deps.enqueueCommand(
       worker.deviceId,
       "send",
-      { workerId: worker.workerId, text: input.text, intent: input.intent },
-      { workerId: worker.workerId, cmdId: input.cmdId },
+      {
+        workerId: worker.workerId,
+        text: input.text,
+        intent: input.intent,
+        ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+      },
+      {
+        workerId: worker.workerId,
+        cmdId: input.cmdId,
+        ...(input.attachments?.length
+          ? {
+              links: input.attachments.flatMap((attachment) => [
+                { attachmentId: attachment.id, refType: "cmd" as const, refId: input.cmdId, targetDeviceId: worker.deviceId },
+                ...(input.sourceMsgId
+                  ? [{ attachmentId: attachment.id, refType: "msg" as const, refId: input.sourceMsgId, targetDeviceId: worker.deviceId }]
+                  : []),
+              ]),
+            }
+          : {}),
+      },
     );
     this.ledger.timeline.add(
       worker.threadId,

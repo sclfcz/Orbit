@@ -44,6 +44,19 @@ describe("HelloMessageSchema", () => {
     });
     expect(parsed.success).toBe(true);
   });
+
+  it("accepts an agent's optional imageInput capability and keeps old hello payloads valid", () => {
+    const oldAgent = { kind: "pi", version: "1.2.0", capabilities: { images: true } };
+    expect(HelloMessageSchema.safeParse({ ...validHello, agents: [oldAgent] }).success).toBe(true);
+    expect(HelloMessageSchema.safeParse({
+      ...validHello,
+      agents: [{ ...oldAgent, imageInput: "reference" }],
+    }).success).toBe(true);
+    expect(HelloMessageSchema.safeParse({
+      ...validHello,
+      agents: [{ ...oldAgent, imageInput: "inline" }],
+    }).success).toBe(false);
+  });
 });
 
 describe("WelcomeMessageSchema", () => {
