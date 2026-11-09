@@ -1,7 +1,8 @@
 // WorkerManager × ClaudeAdapter (issue #17): the steward targets an agent by kind, the
-// honest capabilities degrade at the manager (readonly/images refused, mid-run sends
-// deferred past run end and reported as such, deferred texts come back on interrupt), and
-// hello.agents / workers snapshots carry the per-agent truth.
+// honest capabilities degrade at the manager (readonly refused, mid-run sends deferred past
+// run end and reported as such, deferred texts come back on interrupt), images are carried
+// on start, prompt and deferral paths (ADR-0014 phase 7), and hello.agents / workers
+// snapshots carry the per-agent truth.
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -115,20 +116,66 @@ describe("hello.agents and worker identity (issue #17 AC)", () => {
 });
 
 describe("capability degradation at the manager (§3, issue #17 AC)", () => {
-  it("refuses readonly tasks and images for an agent that honestly cannot do them", async () => {
+  it("refuses readonly tasks for an agent that honestly cannot do them", async () => {
     setup([], []);
     await expect(
       manager.handleCommand("c3", "start_worker", { ...args(), mode: "readonly" }, undefined),
     ).rejects.toMatchObject({ code: "unsupported_capability" });
-    await expect(
-      manager.handleCommand(
+  });
+
+  it(
+    "carries images through start_worker and a cold-relaunch send (ADR-0014 phase 7)",
+    async () => {
+      const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+      setup(
+        [],
+        [
+          [...claudeReportRun({ status: "done", summary: "saw the first image" })],
+          [...claudeReportRun({ status: "done", summary: "saw the second image" })],
+        ],
+      );
+      await manager.handleCommand(
         "c4",
         "start_worker",
-        { ...args(), images: [{ data: "aGk=", mimeType: "image/png" }] },
+        { ...args(), images: [{ data: PNG, mimeType: "image/png" }] },
         undefined,
-      ),
-    ).rejects.toMatchObject({ code: "unsupported_capability" });
-  });
+      );
+      await waitFor(() => eventsOf("w-claude-m1", "settled").length > 0, 15_000, "run 1 settle");
+      // The worker is idle-cold after its result: this send relaunches with --resume.
+      const sent = (await manager.handleCommand(
+        "c4b",
+        "send",
+        { workerId: "w-claude-m1", text: "Now this one", images: [{ data: PNG, mimeType: "image/png" }] },
+        undefined,
+      )) as { delivery: string };
+      expect(sent.delivery).toBe("prompt");
+      await waitFor(() => eventsOf("w-claude-m1", "settled").length >= 2, 30_000, "run 2 settle");
+
+      const prompts = readPrompts();
+      expect(prompts.length).toBe(2);
+      expect(prompts[0]!.images?.map((i) => i.mimeType)).toEqual(["image/png"]);
+      expect(prompts[1]!.prompt).toBe("Now this one");
+      expect(prompts[1]!.images?.map((i) => i.mimeType)).toEqual(["image/png"]);
+    },
+    60_000,
+  );
+
+  it(
+    "refuses an image the CLI could not take before spawning anything",
+    async () => {
+      setup([], []);
+      await expect(
+        manager.handleCommand(
+          "c4c",
+          "start_worker",
+          { ...args(), images: [{ data: "aGk=", mimeType: "image/svg+xml" }] },
+          undefined,
+        ),
+      ).rejects.toMatchObject({ code: "bad_request" });
+      expect(readPrompts().length).toBe(0);
+    },
+    30_000,
+  );
 
   it(
     "defers a mid-run send past run end, tells the steward, then delivers it as the next prompt",
@@ -268,12 +315,12 @@ describe("mixed-fleet lifecycle", () => {
 });
 
 /** fake-claude's prompt log: every consumed (stdin-ended) prompt. */
-function readPrompts(): Array<{ prompt: string }> {
+function readPrompts(): Array<{ prompt: string; images?: Array<{ mimeType: string }> }> {
   try {
     return readFileSync(CLAUDE_PROMPT_LOG(), "utf8")
       .split("\n")
       .filter((l) => l.trim())
-      .map((l) => JSON.parse(l) as { prompt: string });
+      .map((l) => JSON.parse(l) as { prompt: string; images?: Array<{ mimeType: string }> });
   } catch {
     return [];
   }
@@ -346,35 +393,36 @@ describe("restart reconciliation for claude workers (§9.1 via issue #17)", () =
 // workerId is pinned to its agent for life, and an interrupt landing in claude's
 // post-result window must not claim it aborted a completed run.
 describe("PR #59 review fixes", () => {
-  it("refuses send.images for a no-images agent — every delivery path, not just start_worker (finding 2)", async () => {
-    setup([], [[...claudeReportRun({ status: "done", summary: "ok" })]]);
-    await manager.handleCommand("f1", "start_worker", cmdArgs(args()), undefined);
-    await waitFor(() => eventsOf("w-claude-m1", "settled").length > 0, 15_000, "settle");
-    // idle → the prompt path; running would hit the steer path; both must refuse alike.
-    await expect(
-      manager.handleCommand(
-        "f2",
-        "send",
-        { workerId: "w-claude-m1", text: "look at this", intent: "auto", images: [{ data: "aGk=", mimeType: "image/png" }] },
-        undefined,
-      ),
-    ).rejects.toMatchObject({ code: "unsupported_capability" });
-  });
-
-  it("refuses mid-run image sends on the deferral path too (finding 2)", async () => {
-    setup([], [[{ delayMs: 60_000 }]]);
-    await manager.handleCommand("f3", "start_worker", cmdArgs(args()), undefined);
-    await waitFor(() => eventsOf("w-claude-m1", "started").length > 0, 15_000, "started");
-    await expect(
-      manager.handleCommand(
+  it(
+    "carries a mid-run image send through the deferral path (finding 2, now that images are supported)",
+    async () => {
+      // Claude has no mid-run channel: the image send is queued durably and delivered as
+      // the next run's input — the image must survive that hop, not be dropped.
+      const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+      setup(
+        [],
+        [
+          [{ delayMs: 1500 }, ...claudeReportRun({ status: "done", summary: "run one" })],
+          [...claudeReportRun({ status: "done", summary: "run two" })],
+        ],
+      );
+      await manager.handleCommand("f3", "start_worker", cmdArgs(args()), undefined);
+      const queued = (await manager.handleCommand(
         "f4",
         "send",
-        { workerId: "w-claude-m1", text: "and this", intent: "now", images: [{ data: "aGk=", mimeType: "image/png" }] },
+        { workerId: "w-claude-m1", text: "and this", intent: "now", images: [{ data: PNG, mimeType: "image/png" }] },
         undefined,
-      ),
-    ).rejects.toMatchObject({ code: "unsupported_capability" });
-    expect(store.getWorker("w-claude-m1")!.state).toBe("running"); // nothing deferred
-  });
+      )) as { delivery: string; effect?: string };
+      expect(queued.delivery).toBe("queued");
+      await waitFor(() => eventsOf("w-claude-m1", "settled").length >= 2, 30_000, "both runs settle");
+
+      const prompts = readPrompts();
+      expect(prompts[0]!.images).toBeUndefined(); // first start was text-only
+      expect(prompts[1]!.prompt).toBe("and this");
+      expect(prompts[1]!.images?.map((i) => i.mimeType)).toEqual(["image/png"]);
+    },
+    60_000,
+  );
 
   it("a workerId is pinned to its agent: a re-start under another agent is refused (finding 3)", async () => {
     setup([], [[...claudeReportRun({ status: "done", summary: "ok" })]]);

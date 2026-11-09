@@ -132,7 +132,7 @@ describe("invocation contract (spike-conclusions §2)", () => {
     30_000,
   );
 
-  it("declares its capabilities honestly: no steer, no follow-up, no images, no readonly", () => {
+  it("declares its capabilities honestly: no steer, no follow-up, no readonly, images yes", () => {
     setup([]);
     expect(adapter.capabilities).toMatchObject({
       steer: false,
@@ -140,12 +140,148 @@ describe("invocation contract (spike-conclusions §2)", () => {
       interrupt: true,
       resume: true,
       history: false,
-      images: false,
+      images: true,
       structuredReport: true,
       readonly: false,
     });
     expect(adapter.kind).toBe("claude-code");
   });
+});
+
+describe("image input (ADR-0014 phase 7)", () => {
+  // A real 1×1 PNG: base64 is what the Steward hands the connector, and the shape the CLI
+  // receives (`source: {type:"base64", media_type, data}`).
+  const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+  it(
+    "starts with --input-format stream-json and writes one user message with text + image",
+    async () => {
+      setup([[{ emit: claudeAssistantText("read it") }]]);
+      await adapter.start(spec({ images: [{ data: PNG, mimeType: "image/png" }] }));
+      await waitFor(() => settledOf()[0], 10_000, "settle");
+
+      const argv = readLog(ARGV_LOG()).map((l) => l as unknown as string[])[0]!;
+      expect(argv).toContain("--input-format");
+      expect(argv[argv.indexOf("--input-format") + 1]).toBe("stream-json");
+      // The output side is unchanged: the connector still parses stream-json events.
+      expect(argv[argv.indexOf("--output-format") + 1]).toBe("stream-json");
+
+      const entry = promptLogs()[0] as unknown as {
+        inputFormat: string;
+        prompt: string;
+        messages: Array<{ type: string; message: { role: string; content: Array<Record<string, unknown>> } }>;
+        images: Array<{ sourceType: string; mimeType: string; data: string }>;
+        stdinEnded: boolean;
+      };
+      expect(entry.stdinEnded).toBe(true);
+      expect(entry.inputFormat).toBe("stream-json");
+      const message = entry.messages[0]!;
+      expect(message.type).toBe("user");
+      expect(message.message.role).toBe("user");
+      // Text first, then the image — the order the owner wrote them in.
+      expect(message.message.content.map((b) => b.type)).toEqual(["text", "image"]);
+      expect(message.message.content[0]!.text).toBe("Do the task");
+      expect(message.message.content[1]!.source).toEqual({ type: "base64", media_type: "image/png", data: PNG });
+      expect(entry.images).toEqual([{ sourceType: "base64", mimeType: "image/png", data: PNG }]);
+      expect(settledOf()[0]!.outcome).toBe("unreported");
+    },
+    30_000,
+  );
+
+  it(
+    "carries every image in delivery order when a message has several",
+    async () => {
+      setup([[{ emit: claudeAssistantText("both") }]]);
+      const jpeg = "aGVsbG8=";
+      await adapter.start(
+        spec({
+          images: [
+            { data: PNG, mimeType: "image/png" },
+            { data: jpeg, mimeType: "image/jpeg" },
+          ],
+        }),
+      );
+      await waitFor(() => settledOf()[0], 10_000, "settle");
+      const types = (promptLogs()[0] as unknown as { images: Array<{ mimeType: string }> }).images.map((i) => i.mimeType);
+      expect(types).toEqual(["image/png", "image/jpeg"]);
+    },
+    30_000,
+  );
+
+  it(
+    "keeps the plain-text stdin path for a run without images",
+    async () => {
+      setup([[{ emit: claudeAssistantText("text only") }]]);
+      await adapter.start(spec());
+      await waitFor(() => settledOf()[0], 10_000, "settle");
+      const argv = readLog(ARGV_LOG()).map((l) => l as unknown as string[])[0]!;
+      expect(argv).not.toContain("--input-format");
+      const entry = promptLogs()[0] as unknown as { inputFormat: string; prompt: string; images?: unknown };
+      expect(entry.inputFormat).toBe("text");
+      expect(entry.prompt).toBe("Do the task");
+      expect(entry.images).toBeUndefined();
+    },
+    30_000,
+  );
+
+  it(
+    "a send with images resumes the session with --input-format stream-json",
+    async () => {
+      setup([[{ emit: claudeAssistantText("first run done") }], [{ emit: claudeAssistantText("saw the image") }]]);
+      const handle = await adapter.start(spec());
+      await waitFor(() => settledOf()[0], 10_000, "run 1 settle");
+      await adapter.send("w-claude-1", { text: "And this one", images: [{ data: PNG, mimeType: "image/png" }] }, "prompt");
+      await waitFor(() => settledOf()[1], 15_000, "run 2 settle");
+
+      const argvLogs = readLog(ARGV_LOG()).map((l) => l as unknown as string[]);
+      expect(argvLogs.length).toBe(2);
+      expect(argvLogs[0]!.includes("--input-format")).toBe(false);
+      const resumeIdx = argvLogs[1]!.indexOf("--resume");
+      expect(resumeIdx).toBeGreaterThan(-1);
+      expect(argvLogs[1]![resumeIdx + 1]).toBe(handle.sessionId);
+      expect(argvLogs[1]![argvLogs[1]!.indexOf("--input-format") + 1]).toBe("stream-json");
+
+      const entries = promptLogs() as Array<{ prompt: string; images?: Array<{ mimeType: string }> }>;
+      expect(entries[1]!.prompt).toBe("And this one");
+      expect(entries[1]!.images?.map((i) => i.mimeType)).toEqual(["image/png"]);
+      expect(settledOf()[1]!.outcome).toBe("unreported");
+    },
+    30_000,
+  );
+
+  it(
+    "rejects an empty or non-base64 image and an unsupported type before any process starts",
+    async () => {
+      setup([]);
+      for (const images of [
+        [{ data: "", mimeType: "image/png" }],
+        [{ data: "not base64!!", mimeType: "image/png" }],
+        [{ data: PNG, mimeType: "image/svg+xml" }],
+        [{ data: PNG, mimeType: "" }],
+      ]) {
+        await expect(adapter.start(spec({ images }))).rejects.toMatchObject({ code: "bad_request" });
+      }
+      // Nothing spawned, nothing written: the refusal is before the CLI ever sees the spec.
+      expect(readLog(ARGV_LOG()).length).toBe(0);
+      expect(readLog(LOG()).length).toBe(0);
+      expect(adapter.isRunning("w-claude-1")).toBe(false);
+    },
+    30_000,
+  );
+
+  it(
+    "rejects bad images on the send path too, leaving the existing run untouched",
+    async () => {
+      setup([[{ emit: claudeAssistantText("first run done") }]]);
+      await adapter.start(spec());
+      await waitFor(() => settledOf()[0], 10_000, "run 1 settle");
+      await expect(
+        adapter.send("w-claude-1", { text: "bad", images: [{ data: "", mimeType: "image/png" }] }, "prompt"),
+      ).rejects.toMatchObject({ code: "bad_request" });
+      expect(readLog(ARGV_LOG()).length).toBe(1); // only the first run spawned
+    },
+    30_000,
+  );
 });
 
 describe("stream mapping and shared adjudication (§5.2 via the pi path)", () => {
