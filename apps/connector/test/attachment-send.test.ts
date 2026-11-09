@@ -112,6 +112,11 @@ describe("attachment pulls and Pi delivery (ADR-0014 phase 4)", { timeout: 30_00
     }) as typeof fetch;
     await startApp([reportRun({ status: "done", summary: "ready" }), reportRun({ status: "done", summary: "saw it" })], fetchImpl);
     expect(mock.hellos().at(-1)!.agents).toContainEqual(expect.objectContaining({ kind: "pi", imageInput: "reference" }));
+    // imageInput follows each adapter's own images capability; text-only agents never advertise it.
+    const agents = (mock.hellos().at(-1) as { agents: Array<{ kind: string; capabilities: { images: boolean }; imageInput?: string }> }).agents;
+    for (const agent of agents) {
+      expect(Boolean(agent.imageInput), agent.kind).toBe(Boolean(agent.capabilities.images));
+    }
     const workerId = await startWorker();
     await waitFor(() => store.getWorker(workerId)?.state === "idle", 10_000, "worker idle");
 

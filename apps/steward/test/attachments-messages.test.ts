@@ -104,13 +104,14 @@ async function counts(): Promise<{ attachments: number; links: number; inbound: 
   });
 }
 
-async function runningWorker(options: { name: string; imageInput: boolean; agents?: string[]; agent?: string }): Promise<{
+async function runningWorker(options: { name: string; imageInput: boolean; agents?: string[]; agent?: string; imageInputKinds?: string[] }): Promise<{
   fake: FakeConnector;
   workerId: string;
   threadId: string;
 }> {
   const fake = await pairFakeConnector(options.name, { run: null, autorun: false, agents: options.agents });
   fake.imageInput = options.imageInput;
+  if (options.imageInputKinds) fake.imageInputKinds = options.imageInputKinds;
   await fake.connect();
   const outcome = await ownerStub().dispatchForTest({
     prompt: "看图任务",
@@ -270,15 +271,19 @@ describe("main composer attachments", { timeout: 30_000 }, () => {
     const ready = await runningWorker({ name: "mac-ready", imageInput: true });
     const unsupported = await runningWorker({ name: "mac-codex-2", imageInput: true, agents: ["codex"], agent: "codex" });
     const upgrade = await runningWorker({ name: "mac-upgrade", imageInput: false });
+    const codexReady = await runningWorker({ name: "mac-codex-img", imageInput: true, agents: ["codex"], agent: "codex", imageInputKinds: ["codex"] });
     const { cookie } = await browser();
     const snap = await workspace(cookie);
     const states = new Map(snap.threads.flatMap((thread) => thread.workers).map((worker) => [worker.id, worker.imageInput]));
     expect(states.get(ready.workerId)).toBe("ready");
     expect(states.get(unsupported.workerId)).toBe("unsupported");
     expect(states.get(upgrade.workerId)).toBe("upgrade_required");
+    // A non-Pi agent becomes ready only when its own hello entry advertises imageInput.
+    expect(states.get(codexReady.workerId)).toBe("ready");
     ready.fake.close();
     unsupported.fake.close();
     upgrade.fake.close();
+    codexReady.fake.close();
   }, 30_000);
 
   it("rejects ordinary messages and closed-report replies before sh_inbound/outbox/link", async () => {

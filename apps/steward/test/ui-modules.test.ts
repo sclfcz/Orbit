@@ -10,6 +10,7 @@ import { dayKey, formatClock, formatDay, formatRelative, formatUsd, parseInline,
 import { ACTION_KEYS, FATAL_COPY, KNOWN_TITLES, groupByDay, groupThreads, messagesFor, modelAfterProviderChange, thinkingAfterModelChange, availableChatModels, initialSetupStep, previewOf, summarize, threadMatches, withPending, workOn } from "../ui/model.js";
 import { cardView } from "../src/workspace.ts";
 import { attentionImageReply } from "../src/image-route.ts";
+import { imageInputState } from "../src/image-capability.ts";
 import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT, ATTACHMENT_MAX_TOTAL_BYTES, attachmentControl, attachmentErrorKey, attachmentStateKey, attachmentsReady, sessionComposeControls, validateAttachmentSelection } from "../ui/attachment-model.js";
 import type { ReportRow, WorkerRow } from "../src/ledger.ts";
 import { askUserCard, noteDecisionCard, offlineAskCard, reportCardFor, routineOfferCard, workerQuestionCard } from "../src/report-template.ts";
@@ -247,6 +248,16 @@ describe("attachment client rules (ADR-0014)", () => {
     expect(attentionImageReply(ledger({ agent: "codex", deviceId: "dev1" }, { status: "open", workerId: "w1", kind: "report" }), row, machine)).toBe("unsupported");
     expect(attentionImageReply(ledger({ agent: "pi", deviceId: "dev2" }, { status: "open", workerId: "w1", kind: "report" }), row, machine)).toBe("upgrade_required");
     expect(attentionImageReply(ledger({ agent: "pi", deviceId: "dev1" }, { status: "answered", workerId: "w1", kind: "report" }), row, machine)).toBeUndefined();
+  });
+
+  it("reads image input from the worker's own agent entry, not Pi's", () => {
+    const pi = { kind: "pi", imageInput: "reference" as const };
+    expect(imageInputState("codex", [pi, { kind: "codex" }])).toBe("unsupported");
+    expect(imageInputState("codex", [pi, { kind: "codex", imageInput: "reference" }])).toBe("ready");
+    expect(imageInputState("claude-code", [{ kind: "claude-code", imageInput: "reference" }])).toBe("ready");
+    expect(imageInputState("claude-code", [pi])).toBe("unsupported");
+    expect(imageInputState("pi", [{ kind: "codex", imageInput: "reference" }])).toBe("upgrade_required");
+    expect(imageInputState("pi", undefined)).toBe("upgrade_required");
   });
 });
 
