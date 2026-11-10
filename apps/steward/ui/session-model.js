@@ -13,6 +13,7 @@
 //   image        { image: { mime, data } }
 //   bash         { command, output, exitCode, cancelled, truncated }
 //   meta         { kind, title, detail }       bookkeeping the agent wrote (model change, compaction…)
+//   report       { status, answer, summary, sections, tests, json }  Codex's structured final report
 //   raw          { title, json }               anything else, verbatim
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -211,6 +212,33 @@ function claudeEntry(record) {
   }
 }
 
+const REPORT_STATUS = new Set(['done', 'blocked', 'needs_decision']);
+const REPORT_KEYS = new Set(['status', 'summary', 'changes', 'decisions', 'leftovers', 'tests', 'question', 'next', 'answer']);
+
+/**
+ * Codex ends each turn with the report Orbit asks for as JSON text (connector's codex-report.ts).
+ * Read it into labelled parts so the viewer does not show raw JSON; anything that is not exactly
+ * that shape stays a plain text block.
+ */
+export function codexReport(text) {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('{')) return null;
+  let value;
+  try { value = JSON.parse(trimmed); } catch { return null; }
+  if (!isObject(value) || typeof value.summary !== 'string' || !REPORT_STATUS.has(value.status)) return null;
+  if (Object.keys(value).some((key) => !REPORT_KEYS.has(key))) return null;
+  const list = (key) => (Array.isArray(value[key]) ? value[key].filter((item) => typeof item === 'string' && item.trim() !== '') : []);
+  const line = (key) => (typeof value[key] === 'string' && value[key].trim() !== '' ? value[key] : '');
+  const sections = [
+    ...['changes', 'decisions', 'leftovers'].map((key) => ({ key, items: list(key) })),
+    ...['question', 'next'].map((key) => ({ key, items: line(key) ? [line(key)] : [] })),
+  ].filter((section) => section.items.length > 0);
+  const tests = isObject(value.tests) && value.tests.ran === true
+    ? { passed: typeof value.tests.passed === 'boolean' ? value.tests.passed : null, note: asText(value.tests.note) }
+    : null;
+  return { t: 'report', status: value.status, answer: line('answer'), summary: value.summary, sections, tests, json: pretty(value) };
+}
+
 // Codex rollouts contain response_item plus mirrored event_msg records. Render message
 // content from response_item once; keep mirrored metadata inspectable without duplicate text.
 const CODEX_TYPES = new Set(['session_meta', 'response_item', 'event_msg', 'turn_context', 'compacted']);
@@ -227,7 +255,9 @@ function codexEntry(record) {
   }
   if (record.type === 'response_item') {
     if (p.type === 'message') return (Array.isArray(p.content) ? p.content : []).map((b) =>
-      ['input_text', 'output_text'].includes(b.type) ? { t: 'text', role: p.role === 'assistant' ? 'assistant' : 'user', text: asText(b.text) } : raw(asText(b.type) || 'content', b));
+      ['input_text', 'output_text'].includes(b.type)
+        ? (p.role === 'assistant' && codexReport(asText(b.text))) || { t: 'text', role: p.role === 'assistant' ? 'assistant' : 'user', text: asText(b.text) }
+        : raw(asText(b.type) || 'content', b));
     if (p.type === 'function_call' || p.type === 'custom_tool_call') {
       let input = p.arguments ?? p.input;
       if (typeof input === 'string') { try { input = JSON.parse(input); } catch {} }
