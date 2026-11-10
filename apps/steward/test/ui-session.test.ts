@@ -3,7 +3,7 @@
 // telling the agent's current branch from the ones it left behind. No DOM here — session.js draws
 // what this describes, and is checked as shipped in ui-modules.test.ts.
 import { describe, expect, it } from "vitest";
-import { branchOf, callSummary, clip, createAssembler, describeRecord, imageSrc, inputRows, placeOf, pretty } from "../ui/session-model.js";
+import { branchOf, callSummary, clip, codexReport, createAssembler, describeRecord, imageSrc, inputRows, placeOf, pretty } from "../ui/session-model.js";
 
 const fragments = (id: string, text: string, size: number) => {
   const out: Array<{ id: string; fragment: { data: string; offset: number; total: number } }> = [];
@@ -18,6 +18,19 @@ describe("Codex local rollout records", () => {
     expect(message.blocks).toEqual([{ t: "text", role: "assistant", text: "answer" }]);
     expect(describeRecord({ type: "event_msg", payload: { type: "agent_message", message: "answer" } }).blocks).toEqual([{ t: "meta", kind: "event", title: "agent_message", detail: "" }]);
     expect(describeRecord({ type: "response_item", payload: { type: "function_call", call_id: "call-1", name: "exec_command", arguments: '{"cmd":"ls"}' } }).blocks).toEqual([{ t: "tool_call", callId: "call-1", name: "exec_command", input: { cmd: "ls" } }]);
+  });
+  it("reads the final structured report into labelled parts instead of raw JSON", () => {
+    const report = { answer: "图里是一个主页。", changes: [], decisions: [], leftovers: ["补文档"], next: null, question: null, status: "done", summary: "概述了图片。", tests: { note: null, passed: null, ran: false } };
+    const [block] = describeRecord({ type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: JSON.stringify(report) }] } }).blocks;
+    expect(block).toMatchObject({ t: "report", status: "done", answer: "图里是一个主页。", summary: "概述了图片。", tests: null, sections: [{ key: "leftovers", items: ["补文档"] }] });
+    expect((block as { json?: string } | undefined)?.json).toContain("leftovers");
+    expect(codexReport(JSON.stringify({ ...report, tests: { ran: true, passed: true, note: "12 passed" } }))?.tests).toEqual({ passed: true, note: "12 passed" });
+    // Anything that is not exactly the report shape stays ordinary text.
+    for (const text of ['{"status":"done"}', JSON.stringify({ ...report, extra: 1 }), JSON.stringify({ ...report, status: "ok" }), "{not json", "plain answer"]) {
+      expect(codexReport(text), text).toBeNull();
+    }
+    const user = describeRecord({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: JSON.stringify(report) }] } });
+    expect(user.blocks[0]).toMatchObject({ t: "text", role: "user" });
   });
   it("keeps errors, compaction and unknown records inspectable", () => {
     expect(describeRecord({ type: "event_msg", payload: { type: "error", message: "failed" } }).blocks[0]).toMatchObject({ kind: "error", detail: "failed" });

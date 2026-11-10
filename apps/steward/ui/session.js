@@ -203,6 +203,24 @@ export function mountSessionViewer(root, { workerId, agentLabel, isActive, isRea
     return fold(line, () => h('div', { class: 'sv-fold-body' }, longText(block.detail, pre, VALUE_CLIP)), `sv-meta is-${block.kind}`).details;
   }
 
+  function reportNode(block) {
+    const status = h('span', { class: `sv-report-status is-${block.status}` }, t(`svReport_${block.status}`));
+    const body = block.answer || block.summary;
+    const tests = block.tests
+      ? labelled(t('svReportTests'), h('div', { class: 'sv-plain' },
+        t(block.tests.passed === true ? 'svReportTestsPassed' : block.tests.passed === false ? 'svReportTestsFailed' : 'svReportTestsRan'),
+        block.tests.note ? ` · ${block.tests.note}` : ''))
+      : null;
+    return h('div', { class: 'sv-report' },
+      longText(body, markup, TEXT_CLIP),
+      block.answer && block.summary && block.summary !== block.answer ? h('p', { class: 'sv-report-summary' }, block.summary) : null,
+      block.sections.map((section) => labelled(t(`svReport_${section.key}`),
+        section.items.length === 1 ? longText(section.items[0], markup, TEXT_CLIP) : h('ul', { class: 'sv-report-list' }, section.items.map((item) => h('li', null, item))))),
+      tests,
+      h('div', { class: 'sv-report-foot' }, status,
+        fold([h('span', { class: 'sv-meta-kind' }, t('svReportRaw'))], () => h('div', { class: 'sv-fold-body' }, longText(block.json, pre, VALUE_CLIP)), 'sv-meta').details));
+  }
+
   const rawNode = (block) => fold([h('span', { class: 'sv-meta-kind' }, t('svRaw')), h('span', { class: 'sv-meta-title' }, block.title)], () => h('div', { class: 'sv-fold-body' }, longText(block.json, pre, VALUE_CLIP)), 'sv-meta').details;
 
   function blockNode(block) {
@@ -221,6 +239,8 @@ export function mountSessionViewer(root, { workerId, agentLabel, isActive, isRea
         return bashNode(block);
       case 'meta':
         return metaNode(block);
+      case 'report':
+        return reportNode(block);
       default:
         return rawNode(block);
     }
@@ -231,7 +251,7 @@ export function mountSessionViewer(root, { workerId, agentLabel, isActive, isRea
     if (nodes.length === 0) return null;
     const first = item.blocks[0];
     const speaker = item.blocks.some((block) => block.t === 'text' && block.role === 'user') ? 'user'
-      : item.blocks.some((block) => block.t === 'text' || block.t === 'thinking' || block.t === 'tool_call') ? 'agent'
+      : item.blocks.some((block) => block.t === 'text' || block.t === 'report' || block.t === 'thinking' || block.t === 'tool_call') ? 'agent'
         : item.blocks.every((block) => block.t === 'meta' || block.t === 'raw') ? 'meta' : 'tool';
     const place = placeOf(item, view.branch);
     const head = speaker === 'meta' ? null : h('div', { class: 'sv-head' },

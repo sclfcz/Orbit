@@ -165,6 +165,7 @@ describe("interface copy", () => {
     for (const state of ["queued", "starting", "running", "recovering", "idle", "broken"]) used.add(`worker${state[0]!.toUpperCase()}${state.slice(1)}`);
     for (const state of ["connecting", "live", "reconnecting", "disconnected"]) used.add(state);
     // The session viewer labels the bookkeeping entries an agent writes by kind (session-model.js).
+    for (const key of ["done", "blocked", "needs_decision", "changes", "decisions", "leftovers", "question", "next"]) used.add(`svReport_${key}`);
     for (const kind of ["session", "model", "thinking_level", "compaction", "branch_summary", "custom", "label", "session_info", "usage", "context_edit", "system", "summary", "info", "error"]) used.add(`svMeta_${kind}`);
     for (const key of [...Object.values(ACTION_KEYS), ...Object.values(KNOWN_TITLES), ...Object.values(FATAL_COPY).flat()]) used.add(key);
     expect(used.size).toBeGreaterThan(60);
