@@ -16,8 +16,26 @@ describe("Codex local rollout records", () => {
     const message = describeRecord({ type: "response_item", timestamp: "2026-11-06T00:00:00Z", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "answer" }] } });
     expect(message.agent).toBe("codex");
     expect(message.blocks).toEqual([{ t: "text", role: "assistant", text: "answer" }]);
-    expect(describeRecord({ type: "event_msg", payload: { type: "agent_message", message: "answer" } }).blocks).toEqual([{ t: "meta", kind: "event", title: "agent_message", detail: "" }]);
+    expect(describeRecord({ type: "event_msg", payload: { type: "agent_message", message: "answer" } }).blocks).toEqual([]);
     expect(describeRecord({ type: "response_item", payload: { type: "function_call", call_id: "call-1", name: "exec_command", arguments: '{"cmd":"ls"}' } }).blocks).toEqual([{ t: "tool_call", callId: "call-1", name: "exec_command", input: { cmd: "ls" } }]);
+  });
+  it("folds the context Codex injects and drops its bookkeeping, so only the conversation shows", () => {
+    const msg = (role: string, content: unknown[]) => describeRecord({ type: "response_item", payload: { type: "message", role, content } }).blocks;
+    expect(msg("developer", [{ type: "input_text", text: "You are Codex…" }, { type: "input_text", text: "<skills_instructions>\n## Skills" }]))
+      .toEqual([{ t: "meta", kind: "context", title: "skills_instructions", detail: "You are Codex…\n\n<skills_instructions>\n## Skills" }]);
+    expect(msg("user", [{ type: "input_text", text: "<environment_context>\n  <cwd>/x</cwd>" }])[0]).toMatchObject({ t: "meta", kind: "context", title: "environment_context" });
+    // Orbit's relay framing and Codex's image wrapper are not what the owner typed.
+    expect(msg("user", [{ type: "input_text", text: "图里是什么" }, { type: "input_text", text: '<image name=[Image #1] path="/tmp/a.png">' }, { type: "input_image", image_url: "" }, { type: "input_text", text: "</image>" }]))
+      .toEqual([{ t: "text", role: "user", text: "图里是什么" }]);
+    expect(msg("user", [{ type: "input_text", text: "（用户对你问题的回答）换一个仓库" }])).toEqual([{ t: "text", role: "user", text: "换一个仓库" }]);
+    // A message that only mentions a tag is still the owner's text.
+    expect(msg("user", [{ type: "input_text", text: "what is <environment_context>?" }])[0]).toMatchObject({ t: "text" });
+    for (const type of ["item_completed", "token_count", "task_started", "task_complete", "thread_settings_applied"]) {
+      expect(describeRecord({ type: "event_msg", payload: { type } }).blocks, type).toEqual([]);
+    }
+    expect(describeRecord({ type: "world_state", payload: { full: true } }).blocks).toEqual([]);
+    expect(describeRecord({ type: "token_usage_record", payload: {} }).blocks).toEqual([]);
+    expect(describeRecord({ type: "event_msg", payload: { type: "future_event" } }).blocks[0]).toMatchObject({ t: "raw", title: "future_event" });
   });
   it("reads the final structured report into labelled parts instead of raw JSON", () => {
     const report = { answer: "图里是一个主页。", changes: [], decisions: [], leftovers: ["补文档"], next: null, question: null, status: "done", summary: "概述了图片。", tests: { note: null, passed: null, ran: false } };
