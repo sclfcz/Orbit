@@ -241,23 +241,53 @@ export function codexReport(text) {
 
 // Codex rollouts contain response_item plus mirrored event_msg records. Render message
 // content from response_item once; keep mirrored metadata inspectable without duplicate text.
-const CODEX_TYPES = new Set(['session_meta', 'response_item', 'event_msg', 'turn_context', 'compacted']);
+const CODEX_TYPES = new Set(['session_meta', 'response_item', 'event_msg', 'turn_context', 'compacted', 'world_state', 'token_usage_record']);
+// Bookkeeping Codex writes around every turn. Nothing here is conversation, and the parts that
+// matter (messages, tool calls, errors) arrive in their own records, so these are not drawn.
+const CODEX_SILENT_EVENTS = new Set(['user_message', 'agent_message', 'agent_reasoning', 'item_completed', 'item_started',
+  'token_count', 'task_started', 'task_complete', 'thread_settings_applied']);
+// Context Codex injects into the conversation as `user` or `developer` text: environment, skills,
+// permissions, collaboration mode. It is for the model, so the viewer folds it into one line.
+const CODEX_CONTEXT_TAG = /^\s*<(environment_context|skills_instructions|permissions instructions|collaboration_mode|tools|multi_agent_role|multi_agent_mode|user_instructions|apps_instructions)>/;
+// Orbit prefixes an owner's answer to a worker question (steward.ts relays it this way).
+const ORBIT_ANSWER_PREFIX = '（用户对你问题的回答）';
+const CODEX_IMAGE_TAG = /^\s*<\/?image\b[^>]*>\s*$/;
+
+/** A Codex `message` record's content, with injected context folded and Orbit's relay framing removed. */
+function codexMessage(p) {
+  const content = Array.isArray(p.content) ? p.content : [];
+  const texts = content.filter((b) => isObject(b) && ['input_text', 'output_text'].includes(b.type)).map((b) => asText(b.text));
+  if (p.role === 'developer' || (p.role === 'user' && texts.length > 0 && texts.every((text) => CODEX_CONTEXT_TAG.test(text)))) {
+    const tags = texts.map((text) => CODEX_CONTEXT_TAG.exec(text)?.[1]).filter(Boolean);
+    return [meta('context', [...new Set(tags)].join(', '), texts.join('\n\n'))];
+  }
+  return content.flatMap((b) => {
+    if (!isObject(b)) return [raw('content', b)];
+    if (b.type === 'input_image') return []; // the bytes are not in the record; the image went with the message
+    if (!['input_text', 'output_text'].includes(b.type)) return [raw(asText(b.type) || 'content', b)];
+    let text = asText(b.text);
+    if (p.role === 'assistant') return [codexReport(text) || { t: 'text', role: 'assistant', text }];
+    if (CODEX_IMAGE_TAG.test(text)) return [];
+    if (text.startsWith(ORBIT_ANSWER_PREFIX)) text = text.slice(ORBIT_ANSWER_PREFIX.length);
+    return text.trim() === '' ? [] : [{ t: 'text', role: 'user', text }];
+  });
+}
+
 /** @returns {Array<{ t: string, [key: string]: any }>} */
 function codexEntry(record) {
   const p = isObject(record.payload) ? record.payload : {};
   if (record.type === 'session_meta') return [meta('session', asText(p.cwd), asText(p.id))];
   if (record.type === 'turn_context') return [meta('context', asText(p.model), pretty(p))];
   if (record.type === 'compacted') return [meta('compaction', '', asText(p.message) || pretty(p))];
+  if (record.type === 'world_state' || record.type === 'token_usage_record') return [];
   if (record.type === 'event_msg') {
-    if (['user_message', 'agent_message', 'agent_reasoning'].includes(p.type)) return [meta('event', asText(p.type))];
+    if (CODEX_SILENT_EVENTS.has(p.type)) return [];
     if (p.type === 'error') return [meta('error', '', asText(p.message) || pretty(p))];
     return [raw(asText(p.type) || 'event', record)];
   }
   if (record.type === 'response_item') {
-    if (p.type === 'message') return (Array.isArray(p.content) ? p.content : []).map((b) =>
-      ['input_text', 'output_text'].includes(b.type)
-        ? (p.role === 'assistant' && codexReport(asText(b.text))) || { t: 'text', role: p.role === 'assistant' ? 'assistant' : 'user', text: asText(b.text) }
-        : raw(asText(b.type) || 'content', b));
+    if (p.type === 'message') return codexMessage(p);
+    if (p.type === 'additional_tools') return [meta('context', 'tools', pretty(p.tools ?? p))];
     if (p.type === 'function_call' || p.type === 'custom_tool_call') {
       let input = p.arguments ?? p.input;
       if (typeof input === 'string') { try { input = JSON.parse(input); } catch {} }

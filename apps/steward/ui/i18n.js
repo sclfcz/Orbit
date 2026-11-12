@@ -447,6 +447,7 @@ export const STRINGS = {
   svReportTestsRan: ['Ran, result not stated', '已运行，未说明结果'],
   svReportRaw: ['Raw report', '原始报告'],
   svMeta_session: ['Session', '会话'],
+  svMeta_context: ['Context', '上下文'],
   svMeta_model: ['Model', '模型'],
   svMeta_thinking_level: ['Thinking level', '思考强度'],
   svMeta_compaction: ['Compaction', '压缩上下文'],
